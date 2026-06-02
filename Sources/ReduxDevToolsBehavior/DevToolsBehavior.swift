@@ -48,24 +48,78 @@ public enum DevToolsBehavior {
     ///                            `nil` for regular actions. Required for time travel.
     ///   - restoreStateAction:    Builds the `AppAction` that replaces the live state with
     ///                            a restored snapshot. Required for time travel.
+    /// Base overload — no Codable constraints. MirrorJSON for encoding, no time travel.
+    /// Override individual closures for custom serialization or time travel.
     public static func behaviors<AppAction: Sendable, AppState: Sendable, AppEnvironment: Sendable>(
+        action actionPrism: Prism<AppAction, DevToolsAction>,
+        state statePath: WritableKeyPath<AppState, DevToolsState>,
+        environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
+        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
+        encodeAction: (@Sendable (AppAction) -> String)? = nil,
+        encodeState:  (@Sendable (AppState?) -> String)? = nil,
+        deserializeState:  (@Sendable (String) -> AppState?)? = nil,
+        deserializeAction: (@Sendable (String) -> AppAction?)? = nil
+    ) -> Behavior<AppAction, AppState, AppEnvironment> {
+        lift(
+            actionPrism, statePath, envPath,
+            timeMachine: timeMachineBehavior(
+                extractDevToolsAction: extractDevToolsAction,
+                restoreStateAction: restoreStateAction,
+                encodeAction: encodeAction,
+                encodeState: encodeState,
+                deserializeState: deserializeState,
+                deserializeAction: deserializeAction
+            )
+        )
+    }
+
+    /// Codable overload — `AppState: Codable`. JSONEncoder + JSONDecoder auto-wired for state.
+    public static func behaviors<AppAction: Sendable, AppState: Codable & Sendable, AppEnvironment: Sendable>(
+        action actionPrism: Prism<AppAction, DevToolsAction>,
+        state statePath: WritableKeyPath<AppState, DevToolsState>,
+        environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
+        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
+        encodeAction: (@Sendable (AppAction) -> String)? = nil,
+        deserializeAction: (@Sendable (String) -> AppAction?)? = nil
+    ) -> Behavior<AppAction, AppState, AppEnvironment> {
+        lift(
+            actionPrism, statePath, envPath,
+            timeMachine: timeMachineBehavior(
+                extractDevToolsAction: extractDevToolsAction,
+                restoreStateAction: restoreStateAction,
+                encodeAction: encodeAction,
+                deserializeAction: deserializeAction
+            )
+        )
+    }
+
+    /// Codable overload — both `AppState: Codable` and `AppAction: Codable`.
+    /// JSONEncoder + JSONDecoder auto-wired for all four operations (encode + decode × action + state).
+    ///
+    /// ```swift
+    /// DevToolsBehavior.behaviors(
+    ///     action: AppAction.prism.devTools,
+    ///     state: \AppState.devTools,
+    ///     environment: \AppEnvironment.devTools,
+    ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+    ///     restoreStateAction: { .restoreState($0) }
+    /// )
+    /// ```
+    public static func behaviors<AppAction: Codable & Sendable, AppState: Codable & Sendable, AppEnvironment: Sendable>(
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
         restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
-        Behavior.combine(
-            socketBehavior.lift(
-                action: actionPrism,
-                state: statePath,
-                environment: { $0[keyPath: envPath] }
-            ),
-            timeMachineBehavior(
+        lift(
+            actionPrism, statePath, envPath,
+            timeMachine: timeMachineBehavior(
                 extractDevToolsAction: extractDevToolsAction,
                 restoreStateAction: restoreStateAction
             )
-            .liftEnvironment { $0[keyPath: envPath] }
         )
     }
 
@@ -75,72 +129,122 @@ public enum DevToolsBehavior {
     /// restores state on jump / toggle / import commands.
     ///
     /// Typed `Behavior<AppAction, AppState, DevToolsEnvironment>`. Lift the environment
-    /// axis before combining with your app behavior:
+    /// axis before combining with your app behavior.
+    ///
+    /// ## Serialization defaults
+    ///
+    /// | Closure | Default | When to override |
+    /// |---|---|---|
+    /// | `encodeAction` | ``MirrorJSON`` (auto-uses `JSONEncoder` for `Encodable`) | custom format |
+    /// | `encodeState`  | ``MirrorJSON`` | custom format |
+    /// | `deserializeState`  | `nil` — time travel disabled | provide when `AppState` is not `Decodable` |
+    /// | `deserializeAction` | `nil` — Dispatcher tab disabled | provide when `AppAction` is not `Decodable` |
+    ///
+    /// For `AppState: Codable`, prefer the Codable overload which auto-wires
+    /// `JSONEncoder`/`JSONDecoder` without any parameters.
+    ///
+    /// ## Base overload (no Codable constraints)
+    ///
+    /// ```swift
+    /// DevToolsBehavior.timeMachineBehavior(
+    ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+    ///     restoreStateAction: { .restoreState($0) },
+    ///     deserializeState: { json in myDecode(json) }   // required for time travel
+    /// )
+    /// ```
+    public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
+        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
+        encodeAction: (@Sendable (AppAction) -> String)? = nil,
+        encodeState:  (@Sendable (AppState?) -> String)? = nil,
+        deserializeState:  (@Sendable (String) -> AppState?)? = nil,
+        deserializeAction: (@Sendable (String) -> AppAction?)? = nil
+    ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
+        let encode  = encodeAction ?? { MirrorJSON.encode($0) }
+        let encodeS = encodeState  ?? { $0.map { MirrorJSON.encode($0) } ?? "{}" }
+        return makeTimeMachine(
+            extractDevToolsAction: extractDevToolsAction,
+            restoreStateAction: restoreStateAction,
+            encodeAction: encode,
+            encodeState: encodeS,
+            deserializeState: deserializeState,
+            deserializeAction: deserializeAction
+        )
+    }
+
+    /// Codable overload — `AppState: Codable`.
+    ///
+    /// `JSONEncoder` is used for `encodeState` and `JSONDecoder` for `deserializeState`.
+    /// Prefer this over the base overload when `AppState: Codable`:
     ///
     /// ```swift
     /// DevToolsBehavior.timeMachineBehavior(
     ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
     ///     restoreStateAction: { .restoreState($0) }
+    ///     // encodeState + deserializeState auto-wired from Codable
     /// )
-    /// .liftEnvironment(\AppEnvironment.devTools)
     /// ```
+    public static func timeMachineBehavior<AppAction: Sendable, AppState: Codable & Sendable>(
+        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
+        encodeAction: (@Sendable (AppAction) -> String)? = nil,
+        deserializeAction: (@Sendable (String) -> AppAction?)? = nil
+    ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        return makeTimeMachine(
+            extractDevToolsAction: extractDevToolsAction,
+            restoreStateAction: restoreStateAction,
+            encodeAction: encodeAction ?? { MirrorJSON.encode($0) },
+            encodeState: { state in
+                guard let s = state else { return "{}" }
+                if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
+                return MirrorJSON.encode(s)
+            },
+            deserializeState: { json in
+                json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) }
+            },
+            deserializeAction: deserializeAction
+        )
+    }
+
+    /// Codable overload — both `AppState: Codable` and `AppAction: Codable`.
     ///
-    /// Prefer ``behaviors(action:state:environment:extractDevToolsAction:restoreStateAction:)``
-    /// unless you need to compose the two behaviors separately.
-    public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
+    /// `JSONEncoder`/`JSONDecoder` wired for all four operations.
+    /// The devtools "Dispatcher" tab works automatically.
+    ///
+    /// ```swift
+    /// // Zero extra parameters needed — everything auto-wired
+    /// DevToolsBehavior.timeMachineBehavior(
+    ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+    ///     restoreStateAction: { .restoreState($0) }
+    /// )
+    /// ```
+    public static func timeMachineBehavior<AppAction: Codable & Sendable, AppState: Codable & Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
         restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-        Behavior { action, _ in
-
-            // Intercept devtools commands before regular recording
-            if let dtAction = extractDevToolsAction(action) {
-                return handleDevToolsCommand(dtAction, restoreStateAction: restoreStateAction)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        return makeTimeMachine(
+            extractDevToolsAction: extractDevToolsAction,
+            restoreStateAction: restoreStateAction,
+            encodeAction: { action in
+                if let data = try? encoder.encode(action), let str = String(data: data, encoding: .utf8) { return str }
+                return MirrorJSON.encode(action)
+            },
+            encodeState: { state in
+                guard let s = state else { return "{}" }
+                if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
+                return MirrorJSON.encode(s)
+            },
+            deserializeState: { json in
+                json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) }
+            },
+            deserializeAction: { json in
+                json.data(using: .utf8).flatMap { try? decoder.decode(AppAction.self, from: $0) }
             }
-
-            // Regular app action — record and forward to the devtools panel
-            return .produce { ctx in
-                Effect.task {
-                    let env = ctx.environment
-                    let mgr = env.connectionManager
-                    guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
-
-                    // Encode action (phase 3 — safe, action is a value type captured above)
-                    let actionJSON = env.encodeAction(action)
-
-                    // Post-mutation state (@MainActor hop)
-                    let stateAfter = await ctx.stateAfter
-                    let stateJSON  = env.encodeState(stateAfter.map { $0 as Any })
-
-                    // Store JSON in the ring buffer (reuses already-computed stateJSON)
-                    await mgr.storeStateJSON(stateJSON)
-
-                    // INIT once per connection
-                    let instanceId   = env.instanceId
-                    let instanceName = env.instanceName ?? instanceId
-                    if await mgr.checkAndMarkInitSent() {
-                        _ = await mgr.send(SocketIO.emit("log",
-                            RemoteDevOutbound.`init`(
-                                state: stateJSON,
-                                instanceId: instanceId,
-                                name: instanceName
-                            ).toJSON()
-                        ))
-                    }
-
-                    // ACTION every cycle
-                    _ = await mgr.send(SocketIO.emit("log",
-                        RemoteDevOutbound.action(
-                            action: actionJSON,
-                            state: stateJSON,
-                            instanceId: instanceId
-                        ).toJSON()
-                    ))
-
-                    return nil
-                }
-            }
-        }
+        )
     }
 
     /// The socket-lifecycle behavior: connection, browsing, and devtools command routing.
@@ -317,6 +421,73 @@ public enum DevToolsBehavior {
     public static var behavior: Behavior<DevToolsAction, DevToolsState, DevToolsEnvironment> {
         socketBehavior
     }
+}
+
+// MARK: - Private factories
+
+/// Shared implementation of all `timeMachineBehavior` overloads.
+/// All closures are fully typed — no `Any`, no casts.
+private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
+    extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction?,
+    restoreStateAction: (@Sendable (AppState) -> AppAction)?,
+    encodeAction: @escaping @Sendable (AppAction) -> String,
+    encodeState:  @escaping @Sendable (AppState?) -> String,
+    deserializeState:  (@Sendable (String) -> AppState?)?,
+    deserializeAction: (@Sendable (String) -> AppAction?)?
+) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
+    Behavior { action, _ in
+
+        if let dtAction = extractDevToolsAction(action) {
+            return handleDevToolsCommand(
+                dtAction,
+                restoreStateAction: restoreStateAction,
+                deserializeState: deserializeState,
+                deserializeAction: deserializeAction
+            )
+        }
+
+        return .produce { ctx in
+            Effect.task {
+                let mgr = ctx.environment.connectionManager
+                guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
+
+                let actionJSON = encodeAction(action)
+                let stateAfter = await ctx.stateAfter
+                let stateJSON  = encodeState(stateAfter)
+
+                await mgr.storeStateJSON(stateJSON)
+
+                let instanceId   = ctx.environment.instanceId
+                let instanceName = ctx.environment.instanceName ?? instanceId
+                if await mgr.checkAndMarkInitSent() {
+                    _ = await mgr.send(SocketIO.emit("log",
+                        RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
+                    ))
+                }
+                _ = await mgr.send(SocketIO.emit("log",
+                    RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
+                ))
+                return nil
+            }
+        }
+    }
+}
+
+/// Lifts the socket + time-machine pair into the app's action/state/environment.
+private func lift<AppAction: Sendable, AppState: Sendable, AppEnvironment: Sendable>(
+    _ actionPrism: Prism<AppAction, DevToolsAction>,
+    _ statePath: WritableKeyPath<AppState, DevToolsState>,
+    _ envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
+    timeMachine: Behavior<AppAction, AppState, DevToolsEnvironment>
+) -> Behavior<AppAction, AppState, AppEnvironment> {
+    Behavior.combine(
+        DevToolsBehavior.socketBehavior.lift(
+            action: actionPrism,
+            state: statePath,
+            environment: { $0[keyPath: envPath] }
+        ),
+        timeMachine.liftEnvironment { $0[keyPath: envPath] }
+    )
 }
 
 // MARK: - Private helpers

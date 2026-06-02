@@ -54,12 +54,6 @@ extension DevToolsEnvironment {
         instanceName: String? = nil,
         maxHistorySize: Int = 200,
         bonjourServiceType: String = "_reduxdevtools._tcp.",
-        encodeAction: @escaping @Sendable (Any) -> String = MirrorJSON.encode,
-        encodeState: @escaping @Sendable (Any?) -> String = { state in
-            state.map(MirrorJSON.encode) ?? "{}"
-        },
-        decodeState: (@Sendable (String) -> Any?)? = nil,
-        decodeAction: (@Sendable (String) -> Any?)? = nil,
         urlSession: URLSession = .shared
     ) -> DevToolsEnvironment {
         let manager = DevToolsConnectionManager(maxHistorySize: maxHistorySize)
@@ -92,110 +86,9 @@ extension DevToolsEnvironment {
                 .map { $0.map(ResolvedService.from(resolved:)) }
             },
 
-            instanceId:    instanceId,
-            instanceName:  instanceName,
-            encodeAction:  encodeAction,
-            encodeState:   encodeState,
-            decodeState:   decodeState,
-            decodeAction:  decodeAction
+            instanceId:   instanceId,
+            instanceName: instanceName
         )
-    }
-
-    // MARK: - Codable overloads
-
-    /// Creates a live environment with `JSONEncoder`/`JSONDecoder` wired automatically
-    /// for `AppState: Codable`.
-    ///
-    /// Pass `AppState.self` so the compiler can infer the concrete type for encoding
-    /// and decoding:
-    ///
-    /// ```swift
-    /// // AppState: Codable — full time travel, zero manual config
-    /// devTools: .live(for: AppState.self)
-    ///
-    /// // With custom instanceId
-    /// devTools: .live(for: AppState.self, instanceId: "com.myapp")
-    /// ```
-    ///
-    /// This overload sets:
-    /// - `encodeState`: uses `JSONEncoder`; falls back to ``MirrorJSON`` on failure.
-    /// - `decodeState`: uses `JSONDecoder`.
-    /// - `encodeAction`: ``MirrorJSON`` (uses `JSONEncoder` automatically for `Encodable` actions).
-    ///
-    /// - Parameters:
-    ///   - stateType:          The concrete `AppState` type. Pass `AppState.self`.
-    ///   - instanceId:         Identifier shown in devtools. Default: bundle identifier.
-    ///   - instanceName:       Human-readable label. Default: `instanceId`.
-    ///   - maxHistorySize:     Ring buffer cap. Default 200.
-    ///   - bonjourServiceType: Bonjour service type. Default `"_reduxdevtools._tcp."`.
-    ///   - urlSession:         Session for WebSocket connections. Default `.shared`.
-    public static func live<S: Codable & Sendable>(
-        for stateType: S.Type,
-        instanceId: String = Bundle.main.bundleIdentifier ?? "app",
-        instanceName: String? = nil,
-        maxHistorySize: Int = 200,
-        bonjourServiceType: String = "_reduxdevtools._tcp.",
-        urlSession: URLSession = .shared
-    ) -> DevToolsEnvironment {
-        let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
-
-        return live(
-            instanceId: instanceId,
-            instanceName: instanceName,
-            maxHistorySize: maxHistorySize,
-            bonjourServiceType: bonjourServiceType,
-            encodeAction: MirrorJSON.encode,
-            encodeState: { state in
-                if let s = state as? S,
-                   let data = try? encoder.encode(s),
-                   let str  = String(data: data, encoding: .utf8) { return str }
-                return state.map(MirrorJSON.encode) ?? "{}"
-            },
-            decodeState: { json in
-                json.data(using: .utf8).flatMap { try? decoder.decode(S.self, from: $0) }
-            },
-            urlSession: urlSession
-        )
-    }
-
-    // MARK: - Both state and action Codable
-
-    /// Creates a live environment with `JSONDecoder` wired for both state restoration
-    /// (time travel) and action dispatch from the devtools "Dispatcher" tab.
-    ///
-    /// ```swift
-    /// // AppState: Codable, AppAction: Codable — full bidirectional devtools integration
-    /// devTools: .live(for: AppState.self, action: AppAction.self)
-    /// ```
-    ///
-    /// - Parameters:
-    ///   - stateType:  The concrete `AppState` type. Pass `AppState.self`.
-    ///   - actionType: The concrete `AppAction` type. Pass `AppAction.self`.
-    ///     Must be `Decodable` so the devtools Dispatcher tab can deserialize typed actions.
-    public static func live<S: Codable & Sendable, A: Decodable & Sendable>(
-        for stateType: S.Type,
-        action actionType: A.Type,
-        instanceId: String = Bundle.main.bundleIdentifier ?? "app",
-        instanceName: String? = nil,
-        maxHistorySize: Int = 200,
-        bonjourServiceType: String = "_reduxdevtools._tcp.",
-        urlSession: URLSession = .shared
-    ) -> DevToolsEnvironment {
-        let decoder = JSONDecoder()
-
-        var env = live(
-            for: stateType,
-            instanceId: instanceId,
-            instanceName: instanceName,
-            maxHistorySize: maxHistorySize,
-            bonjourServiceType: bonjourServiceType,
-            urlSession: urlSession
-        )
-        env.decodeAction = { json in
-            json.data(using: .utf8).flatMap { try? decoder.decode(A.self, from: $0) }
-        }
-        return env
     }
 }
 
