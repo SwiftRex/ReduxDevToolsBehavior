@@ -3,89 +3,64 @@ import Foundation
 import SwiftRex
 import SwiftRexConcurrency
 
-/// Creates a behavior that forwards every dispatched `AppAction` and the resulting
-/// `AppState` to the connected remotedev-server, and optionally handles time-travel
-/// and toggle commands by restoring stored state snapshots.
+/// Creates a behavior that forwards every dispatched `AppAction` and resulting
+/// `AppState` to the remotedev-server, and optionally handles time-travel and
+/// toggle commands by decoding stored JSON back to `AppState`.
 ///
-/// ## Phase 1 (zero-config monitoring)
+/// ## Memory model
+///
+/// State history is stored as **JSON strings** in the `DevToolsConnectionManager`
+/// ring buffer — not as live `AppState` objects. This keeps the iOS memory footprint
+/// small: a 200-entry ring buffer of 10 KB JSON snapshots uses ~2 MB, regardless of
+/// how large the live `AppState` graph is.
+///
+/// The canonical full history lives in the devtools panel on the Mac, which has
+/// abundant RAM. When the devtools panel requests time travel it sends back only an
+/// index; the app looks up the stored JSON at that index and decodes it.
+///
+/// ## Phase 1 (monitoring only)
 ///
 /// ```swift
 /// makeDevToolsRecorder(instanceId: "my-app")
 ///     .liftEnvironment(\AppEnvironment.devTools)
 /// ```
 ///
-/// Actions and states are serialized with ``MirrorJSON`` — no `Encodable` required.
+/// ## Phase 2 (time travel + toggle + import)
 ///
-/// ## Phase 2 (time travel + toggle)
-///
-/// Supply `extractDevToolsAction` and `restoreStateAction` to enable in-process
-/// state restoration. When the devtools panel requests a jump, toggle, or import,
-/// the recorder retrieves the stored `AppState` snapshot and dispatches
-/// `restoreStateAction(snapshot)` back into the store:
+/// Requires `AppState: Decodable` and `AppAction` to carry a restore case:
 ///
 /// ```swift
+/// // AppAction
+/// #if DEBUG
+/// case restoreState(AppState)
+/// #endif
+///
+/// // Behavior / Reducer:
+/// case .restoreState(let s): state = s
+///
+/// // Wiring:
 /// makeDevToolsRecorder(
 ///     instanceId: Bundle.main.bundleIdentifier ?? "app",
-///     instanceName: "My App",
-///     extractDevToolsAction: { appAction in
-///         if case .devTools(let dt) = appAction { return dt }
-///         return nil
-///     },
-///     restoreStateAction: { .devTools(.restoreState($0)) },
-///     serialize: { action, state in
-///         let encoder = JSONEncoder()
-///         let actionJSON = (try? encoder.encode(action as! Encodable))
-///             .flatMap { String(data: $0, encoding: .utf8) } ?? MirrorJSON.encode(action)
-///         let stateJSON = state.flatMap { s in
-///             (try? encoder.encode(s)).flatMap { String(data: $0, encoding: .utf8) }
-///         } ?? "{}"
-///         return (actionJSON, stateJSON)
-///     }
-/// )
-/// ```
-///
-/// And in your `AppAction` and `AppState`:
-///
-/// ```swift
-/// enum AppAction {
-///     // ...
-///     #if DEBUG
-///     case devTools(DevToolsAction)
-///     case restoreState(AppState)   // for time travel
-///     #endif
-/// }
-///
-/// // In your Behavior / Reducer:
-/// case .restoreState(let snapshot):
-///     state = snapshot
-/// ```
-///
-/// ## IMPORT_STATE
-///
-/// When the devtools panel imports a full lifted state, the recorder can restore
-/// the `currentStateIndex` snapshot if you provide `deserializeState`:
-///
-/// ```swift
-/// makeDevToolsRecorder(
-///     instanceId: "my-app",
+///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+///     restoreStateAction: { .restoreState($0) },
 ///     deserializeState: { json in
 ///         json.data(using: .utf8).flatMap { try? JSONDecoder().decode(AppState.self, from: $0) }
-///     },
-///     restoreStateAction: { .restoreState($0) }
+///     }
 /// )
+/// .liftEnvironment(\AppEnvironment.devTools)
 /// ```
 ///
 /// - Parameters:
-///   - instanceId: Unique identifier shown in the devtools instance list.
-///   - instanceName: Human-readable label; defaults to `instanceId`.
-///   - extractDevToolsAction: Extracts a `DevToolsAction` from your `AppAction`, or
-///     returns `nil` for regular app actions. Required for time travel and toggle.
-///   - restoreStateAction: Given a stored `AppState` snapshot, returns the `AppAction`
-///     that should be dispatched to replace the live state. Required for time travel.
-///   - deserializeState: Decodes a JSON string back to `AppState`. Required only for
-///     `IMPORT_STATE` — the snapshot is stored from the live state otherwise.
-///   - serialize: Maps `(AppAction, AppState?)` to `(actionJSON, stateJSON)`.
-///     Defaults to ``MirrorJSON`` reflection.
+///   - instanceId:            Unique key shown in the devtools instance list.
+///   - instanceName:          Human-readable label; defaults to `instanceId`.
+///   - extractDevToolsAction: Returns the `DevToolsAction` inside an `AppAction`,
+///                            or `nil` for regular actions. Needed for time travel.
+///   - restoreStateAction:    Given a decoded `AppState`, returns the `AppAction`
+///                            that replaces the live state. Needed for time travel.
+///   - deserializeState:      Decodes a JSON string back to `AppState`. Needed for
+///                            `JUMP_TO_ACTION`, `TOGGLE_ACTION`, and `IMPORT_STATE`.
+///   - serialize:             Maps `(AppAction, AppState?)` → `(actionJSON, stateJSON)`.
+///                            Defaults to ``MirrorJSON`` reflection (no `Encodable` needed).
 public func makeDevToolsRecorder<AppAction: Sendable, AppState: Sendable>(
     instanceId: String,
     instanceName: String? = nil,
@@ -100,58 +75,43 @@ public func makeDevToolsRecorder<AppAction: Sendable, AppState: Sendable>(
     let name = instanceName ?? instanceId
 
     return Behavior { action, _ in
-        let manager = // captured in the closure below
-            Void()  // placeholder — see produce
 
-        // Check if this is a devtools command intercepted by the recorder
+        // Intercept devtools commands before regular recording
         if let dtAction = extractDevToolsAction(action) {
             return handleDevToolsCommand(
                 dtAction,
                 restoreStateAction: restoreStateAction,
-                deserializeState: deserializeState,
-                instanceId: instanceId,
-                name: name,
-                serialize: serialize
+                deserializeState: deserializeState
             )
         }
 
-        // Regular app action: serialize in phase 1 (@MainActor, before mutation)
+        // Regular app action — capture serialized form now (phase 1, @MainActor)
         let actionJSON = serialize(action, nil).action
 
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
-                guard await mgr.shouldRecord else { return nil }
-                guard await mgr.isConnected  else { return nil }
+                guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
 
-                // Read post-mutation state (@MainActor hop)
+                // Post-mutation state (@MainActor hop)
                 let stateAfter = await ctx.stateAfter
-
-                // Store actual AppState snapshot for in-process time travel
-                if let state = stateAfter {
-                    await mgr.storeSnapshot(state)
-                }
-
-                // Serialize state
                 let (_, stateJSON) = serialize(action, stateAfter)
 
-                // Send INIT once per connection
+                // Store JSON in the ring buffer — zero extra serialization cost since
+                // we already computed stateJSON for the wire message.
+                await mgr.storeStateJSON(stateJSON)
+
+                // INIT once per connection
                 if await mgr.checkAndMarkInitSent() {
-                    let initMsg = RemoteDevOutbound.`init`(
-                        state: stateJSON,
-                        instanceId: instanceId,
-                        name: name
-                    )
-                    _ = await mgr.send(SocketIO.emit("log", initMsg.toJSON()))
+                    _ = await mgr.send(SocketIO.emit("log",
+                        RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: name).toJSON()
+                    ))
                 }
 
-                // Send ACTION for this cycle
-                let actionMsg = RemoteDevOutbound.action(
-                    action: actionJSON,
-                    state: stateJSON,
-                    instanceId: instanceId
-                )
-                _ = await mgr.send(SocketIO.emit("log", actionMsg.toJSON()))
+                // ACTION every cycle
+                _ = await mgr.send(SocketIO.emit("log",
+                    RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
+                ))
 
                 return nil
             }
@@ -164,46 +124,40 @@ public func makeDevToolsRecorder<AppAction: Sendable, AppState: Sendable>(
 private func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
     _ command: DevToolsAction,
     restoreStateAction: (@Sendable (AppState) -> AppAction)?,
-    deserializeState: (@Sendable (String) -> AppState?)?,
-    instanceId: String,
-    name: String,
-    serialize: @escaping @Sendable (AppAction, AppState?) -> (action: String, state: String)
+    deserializeState: (@Sendable (String) -> AppState?)?
 ) -> Consequence<AppState, DevToolsEnvironment, AppAction> {
-    guard let restore = restoreStateAction else { return .doNothing }
 
     switch command {
 
-    // MARK: Jump to action / state
+    // MARK: Jump
 
     case let .jumpToAction(index), let .jumpToState(index):
+        guard let restore = restoreStateAction, let decode = deserializeState else { return .doNothing }
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
-                if let snapshot: AppState = await mgr.snapshot(at: index) {
-                    return restore(snapshot)
+                if let json = await mgr.stateJSON(at: index), let state = decode(json) {
+                    return restore(state)
                 }
                 return nil
             }
         }
 
-    // MARK: Toggle action
+    // MARK: Toggle
 
     case let .toggleAction(id):
+        guard let restore = restoreStateAction, let decode = deserializeState else { return .doNothing }
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
                 let isNowSkipped = await mgr.toggleSkipped(id)
-
-                // Restore the nearest valid snapshot:
-                // - If newly skipped: jump to state before this action (id - 1)
-                // - If newly un-skipped: jump back to state AT this action (id)
+                // Skip: jump to state just before this action.
+                // Un-skip: jump back to state at this action.
                 let targetIndex = isNowSkipped ? max(0, id - 1) : id
-
-                // Find nearest non-skipped index at or before the target
-                let resolvedIndex = await mgr.latestNonSkippedIndex(upTo: targetIndex) ?? 0
-
-                if let snapshot: AppState = await mgr.snapshot(at: resolvedIndex) {
-                    return restore(snapshot)
+                let base = await mgr.historyBaseIndex
+                let resolvedIndex = await mgr.latestNonSkippedIndex(upTo: targetIndex) ?? base
+                if let json = await mgr.stateJSON(at: resolvedIndex), let state = decode(json) {
+                    return restore(state)
                 }
                 return nil
             }
@@ -213,68 +167,58 @@ private func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
 
     case .reset:
         return .produce { ctx in
-            Effect.task {
-                await ctx.environment.connectionManager.resetSnapshots()
-                return nil
-            }
+            Effect.fireAndForget { await ctx.environment.connectionManager.resetStateJSONs() }
         }
 
     // MARK: Commit
 
     case .commit:
-        // commitSnapshots() handles the type-erased "keep only last" internally
         return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.commitSnapshots() }
+            Effect.fireAndForget { await ctx.environment.connectionManager.commitStateJSONs() }
+        }
+
+    // MARK: Rollback
+
+    case .rollback:
+        // DevToolsBehavior already pops the last entry from DevToolsState.stateHistory.
+        // Mirror that in the ring buffer.
+        return .produce { ctx in
+            Effect.fireAndForget { await ctx.environment.connectionManager.rollbackStateJSON() }
         }
 
     // MARK: Import state
 
     case let .importState(lifted):
+        // Always update the JSON ring buffer — regardless of whether we can decode.
+        // Decoding + restoration only happens when deserializeState is provided.
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
+                await mgr.replaceStateJSONs(lifted.computedStateJSONs)
+                await mgr.setSkippedActionIds(lifted.skippedActionIds)
 
-                // Restore snapshots from deserialized states (requires deserializeState)
-                if let decode = deserializeState {
-                    let restored = lifted.computedStateJSONs.compactMap { decode($0) }
-                    await mgr.replaceSnapshots(restored)
-                    await mgr.setSkippedActionIds(lifted.skippedActionIds)
+                guard let restore = restoreStateAction, let decode = deserializeState else { return nil }
 
-                    // Jump to currentStateIndex
-                    let target = lifted.currentStateIndex
-                    let resolvedIndex = await mgr.latestNonSkippedIndex(upTo: target) ?? 0
-                    if let snapshot: AppState = await mgr.snapshot(at: resolvedIndex) {
-                        return restore(snapshot)
-                    }
-                } else {
-                    // No deserializer — can only update the skip set
-                    await mgr.setSkippedActionIds(lifted.skippedActionIds)
+                let target = lifted.currentStateIndex
+                let base = await mgr.historyBaseIndex
+                let resolvedIndex = await mgr.latestNonSkippedIndex(upTo: target) ?? base
+                if let json = await mgr.stateJSON(at: resolvedIndex), let state = decode(json) {
+                    return restore(state)
                 }
                 return nil
             }
         }
 
-    // MARK: Pause / Resume / Lock / Unlock (sync with manager)
+    // MARK: Recording control (sync manager with DevToolsBehavior's state changes)
 
     case .pause:
-        return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(true) }
-        }
-
+        return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(true) } }
     case .resume:
-        return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(false) }
-        }
-
+        return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(false) } }
     case .lockChanges:
-        return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(true) }
-        }
-
+        return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(true) } }
     case .unlockChanges:
-        return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(false) }
-        }
+        return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(false) } }
 
     default:
         return .doNothing

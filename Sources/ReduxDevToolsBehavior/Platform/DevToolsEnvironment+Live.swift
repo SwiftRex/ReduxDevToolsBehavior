@@ -28,11 +28,18 @@ extension DevToolsEnvironment {
     ///   - urlSession: The `URLSession` used to open WebSocket connections.
     ///   - bonjourServiceType: Bonjour service type to browse for when
     ///     ``DevToolsAction/startBrowsing`` is dispatched.
+    /// - Parameters:
+    ///   - urlSession:          The `URLSession` used to open WebSocket connections.
+    ///   - bonjourServiceType:  Bonjour service type to browse for.
+    ///   - maxHistorySize:      Maximum number of state JSON strings to retain on the device.
+    ///                          Older entries are evicted when the limit is reached. Default 200.
+    ///                          The canonical full history is stored in the devtools panel on the Mac.
     public static func live(
         urlSession: URLSession = .shared,
-        bonjourServiceType: String = "_reduxdevtools._tcp."
+        bonjourServiceType: String = "_reduxdevtools._tcp.",
+        maxHistorySize: Int = 200
     ) -> DevToolsEnvironment {
-        let manager = DevToolsConnectionManager()
+        let manager = DevToolsConnectionManager(maxHistorySize: maxHistorySize)
 
         return DevToolsEnvironment(
             connectionManager: manager,

@@ -126,7 +126,7 @@ public enum DevToolsBehavior {
                     $0.currentActionIndex = nil
                 }
                 .produce { ctx in
-                    Effect.fireAndForget { await ctx.environment.connectionManager.resetSnapshots() }
+                    Effect.fireAndForget { await ctx.environment.connectionManager.resetStateJSONs() }
                 }
 
             case .commit:
@@ -140,7 +140,7 @@ public enum DevToolsBehavior {
                 }
                 .produce { ctx in
                     Effect.fireAndForget {
-                        await ctx.environment.connectionManager.commitSnapshots()
+                        await ctx.environment.connectionManager.commitStateJSONs()
                     }
                 }
 

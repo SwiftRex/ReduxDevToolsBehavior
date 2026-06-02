@@ -1,26 +1,51 @@
 import Foundation
 import WebSocketClient
 
-/// Thread-safe holder for the live WebSocket connection, type-erased state snapshots,
-/// and recording control flags.
+/// Thread-safe holder for the live WebSocket connection, a bounded ring buffer of
+/// serialized state JSON strings, and recording control flags.
 ///
 /// Lives inside ``DevToolsEnvironment`` as a shared reference so that
 /// ``DevToolsBehavior`` (opens/closes the connection) and ``makeDevToolsRecorder``
-/// (sends per-action messages and stores snapshots) can coordinate without
+/// (sends per-action messages and stores JSON history) can coordinate without
 /// passing references through store state.
+///
+/// ## Memory model
+///
+/// State history is stored as JSON **strings** (not typed `AppState` objects), bounded
+/// by `maxHistorySize`. This keeps the iOS memory footprint small — the canonical
+/// full history lives in the devtools panel on the Mac, which has abundant RAM.
+///
+/// New entries are appended at the end. When the buffer is full the oldest entry is
+/// evicted from the front and `historyBaseIndex` advances, preserving the logical
+/// action indices that the devtools panel uses.
+///
+/// Time travel requires `deserializeState` in ``makeDevToolsRecorder`` to decode a
+/// JSON string back to `AppState`. Without it the ring buffer is still maintained
+/// (for display in the app) but `JUMP_TO_ACTION` / `TOGGLE_ACTION` cannot restore state.
 public actor DevToolsConnectionManager {
+
+    // MARK: - Init
+
+    /// Creates a manager with a given maximum state-JSON history size.
+    ///
+    /// - Parameter maxHistorySize: Maximum number of state JSON strings to retain on
+    ///   the device. Older entries are evicted when the limit is reached. Default 200.
+    public init(maxHistorySize: Int = 200) {
+        self.maxHistorySize = maxHistorySize
+    }
 
     // MARK: - Connection
 
     private var connection: WebSocketConnection?
 
-    /// Sets (or clears) the live connection. Resets the INIT-sent flag and
-    /// clears the snapshot history so a new session starts fresh.
+    /// Sets (or clears) the live connection. Resets the INIT flag and
+    /// clears the state JSON history so a new session starts fresh.
     func setConnection(_ connection: WebSocketConnection?) {
         self.connection?.close()
         self.connection = connection
         hasSentInit = false
-        snapshots = []
+        stateJSONHistory = []
+        historyBaseIndex = 0
         skippedActionIds = []
     }
 
@@ -32,7 +57,8 @@ public actor DevToolsConnectionManager {
         connection?.close()
         connection = nil
         hasSentInit = false
-        snapshots = []
+        stateJSONHistory = []
+        historyBaseIndex = 0
         skippedActionIds = []
     }
 
@@ -47,51 +73,69 @@ public actor DevToolsConnectionManager {
     private var hasSentInit = false
 
     /// Returns `true` the first time it is called after a connection is established.
-    /// Used by ``makeDevToolsRecorder`` to send the INIT message exactly once.
     func checkAndMarkInitSent() -> Bool {
         if hasSentInit { return false }
         hasSentInit = true
         return true
     }
 
-    // MARK: - State snapshots (for in-process time travel)
+    // MARK: - State JSON ring buffer
 
-    /// Type-erased `AppState` values, one per dispatched action.
-    /// Index 0 = initial state; index N = state after the Nth action.
-    private var snapshots: [Any] = []
+    /// At most `maxHistorySize` state JSON strings.
+    /// `stateJSONHistory[0]` corresponds to logical index `historyBaseIndex`.
+    private var stateJSONHistory: [String] = []
 
-    /// Appends `state` to the snapshot history.
-    func storeSnapshot<S: Sendable>(_ state: S) {
-        snapshots.append(state)
+    /// Logical index of `stateJSONHistory[0]`. Advances as old entries are evicted.
+    private(set) var historyBaseIndex: Int = 0
+
+    private let maxHistorySize: Int
+
+    /// Number of JSON strings currently stored.
+    var stateJSONCount: Int { stateJSONHistory.count }
+
+    /// Appends `json` to the ring buffer, evicting the oldest entry if full.
+    func storeStateJSON(_ json: String) {
+        if stateJSONHistory.count >= maxHistorySize {
+            stateJSONHistory.removeFirst()
+            historyBaseIndex += 1
+        }
+        stateJSONHistory.append(json)
     }
 
-    /// Returns the snapshot at `index` cast to `S`, or `nil` if out of range or wrong type.
-    func snapshot<S: Sendable>(at index: Int) -> S? {
-        guard index >= 0, index < snapshots.count else { return nil }
-        return snapshots[index] as? S
+    /// Returns the state JSON at logical `index`, or `nil` if out of the buffered range.
+    func stateJSON(at index: Int) -> String? {
+        let arrayIndex = index - historyBaseIndex
+        guard arrayIndex >= 0, arrayIndex < stateJSONHistory.count else { return nil }
+        return stateJSONHistory[arrayIndex]
     }
 
-    /// Replaces the entire snapshot history with the given array.
-    /// Used during `IMPORT_STATE` when the devtools panel provides pre-serialized snapshots
-    /// and a `deserializeState` closure is available.
-    func replaceSnapshots<S: Sendable>(_ states: [S]) {
-        snapshots = states
+    /// Replaces the entire ring buffer with `jsons` and resets the base index to 0.
+    /// Used during `IMPORT_STATE`.
+    func replaceStateJSONs(_ jsons: [String]) {
+        stateJSONHistory = jsons
+        historyBaseIndex = 0
     }
 
-    /// The number of stored snapshots.
-    var snapshotCount: Int { snapshots.count }
-
-    /// Clears the snapshot history and skipped-action set.
-    func resetSnapshots() {
-        snapshots = []
+    /// Keeps only the last entry as the new baseline (logical index 0).
+    /// Used during `COMMIT`.
+    func commitStateJSONs() {
+        let last = stateJSONHistory.last
+        stateJSONHistory = last.map { [$0] } ?? []
+        historyBaseIndex = 0
         skippedActionIds = []
     }
 
-    /// Keeps only the last snapshot as the new index-0 baseline.
-    /// Used during COMMIT to set the current state as the new initial state.
-    func commitSnapshots() {
-        let last = snapshots.last
-        snapshots = last.map { [$0] } ?? []
+    /// Removes the last entry. Used during `ROLLBACK`.
+    func rollbackStateJSON() {
+        if !stateJSONHistory.isEmpty {
+            stateJSONHistory.removeLast()
+        }
+    }
+
+    /// Clears the ring buffer and the skipped-action set.
+    func resetStateJSONs() {
+        stateJSONHistory = []
+        historyBaseIndex = 0
         skippedActionIds = []
     }
 
@@ -100,7 +144,7 @@ public actor DevToolsConnectionManager {
     private var skippedActionIds: Set<Int> = []
 
     /// Toggles the skip state for `id`.
-    /// - Returns: `true` if the action is now skipped; `false` if it is now active.
+    /// - Returns: `true` if the action is now skipped; `false` if now active.
     @discardableResult
     func toggleSkipped(_ id: Int) -> Bool {
         if skippedActionIds.contains(id) {
@@ -112,17 +156,17 @@ public actor DevToolsConnectionManager {
         }
     }
 
-    /// Returns `true` if action `id` is currently marked as skipped.
     func isSkipped(_ id: Int) -> Bool { skippedActionIds.contains(id) }
 
-    /// Replaces the entire skipped-action set (used during `IMPORT_STATE`).
+    /// Replaces the entire skipped-action set. Used during `IMPORT_STATE`.
     func setSkippedActionIds(_ ids: Set<Int>) { skippedActionIds = ids }
 
-    /// Returns the latest snapshot index ≤ `upTo` that is not in `skippedActionIds`,
-    /// or `nil` if no such index exists.
+    /// Returns the latest logical index ≤ `maxIndex` that is not skipped and has
+    /// a stored JSON string, or `nil` if no such index exists in the buffer.
     func latestNonSkippedIndex(upTo maxIndex: Int) -> Int? {
-        var i = min(maxIndex, snapshots.count - 1)
-        while i >= 0 {
+        let upperBound = min(maxIndex, historyBaseIndex + stateJSONHistory.count - 1)
+        var i = upperBound
+        while i >= historyBaseIndex {
             if !skippedActionIds.contains(i) { return i }
             i -= 1
         }
@@ -131,15 +175,12 @@ public actor DevToolsConnectionManager {
 
     // MARK: - Recording control (PAUSE_RECORDING / LOCK_CHANGES)
 
-    private var isPaused: Bool = false
-    private var isLocked: Bool = false
+    private var isPaused = false
+    private var isLocked = false
 
-    /// Whether new actions should be recorded and forwarded to the devtools panel.
     var shouldRecord: Bool { !isPaused }
-
-    /// Whether the devtools panel has locked state changes.
     var isChangeLocked: Bool { isLocked }
 
-    func setPaused(_ paused: Bool)   { isPaused = paused }
-    func setLocked(_ locked: Bool)   { isLocked = locked }
+    func setPaused(_ paused: Bool) { isPaused = paused }
+    func setLocked(_ locked: Bool) { isLocked = locked }
 }
