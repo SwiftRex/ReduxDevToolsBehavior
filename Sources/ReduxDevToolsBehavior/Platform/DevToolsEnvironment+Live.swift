@@ -50,6 +50,7 @@ extension DevToolsEnvironment {
     ///                         `JSONDecoder` automatically when `AppState: Decodable`.
     ///   - urlSession:         Session for WebSocket connections. Default `.shared`.
     public static func live(
+        connectionMode: ConnectionMode = .manual,
         instanceId: String = Bundle.main.bundleIdentifier ?? "app",
         instanceName: String? = nil,
         maxHistorySize: Int = 200,
@@ -86,8 +87,9 @@ extension DevToolsEnvironment {
                 .map { $0.map(ResolvedService.from(resolved:)) }
             },
 
-            instanceId:   instanceId,
-            instanceName: instanceName
+            instanceId:     instanceId,
+            instanceName:   instanceName,
+            connectionMode: connectionMode
         )
     }
 }

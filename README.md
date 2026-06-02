@@ -16,6 +16,107 @@ in history.
 
 ---
 
+## Connection topology
+
+### Phase 1 — phone connects to remotedev-server (current)
+
+```
+Phone ──WebSocket──▶ remotedev-server ◀──── Redux DevTools panel
+                      (relay, port 8000)        (Electron / browser)
+```
+
+The phone is the **client**. Both the phone and the devtools panel connect to a relay
+server (`remotedev-server`). The server must already be running before the phone connects.
+
+### Phase 3 — phone is the server (native Swift devtools, roadmap)
+
+```
+Phone ◀──WebSocket──── native Swift devtools
+(NWListener + Bonjour)   (browses, connects)
+```
+
+The phone is the **server**. No relay, no configuration. The devtools browses Bonjour,
+finds every advertising phone on the network, and connects automatically. This is the
+ideal developer UX — open the devtools and all running debug builds appear.
+
+**Not yet implemented.** See `ConnectionMode.advertiseAcceptAll` and
+`ConnectionMode.advertise` which are pre-wired in the API for Phase 3.
+
+---
+
+## Connection modes
+
+Configure `connectionMode` in `.live()` and dispatch `DevToolsAction.activate` once at
+app launch:
+
+```swift
+// AppEnvironment
+#if DEBUG
+var devTools: DevToolsEnvironment = .live(connectionMode: .browseOnLaunch)
+#endif
+
+// In @main / App body, after the store is created:
+store.dispatch(.devTools(.activate))
+```
+
+| Mode | Phase | Topology | Notes |
+|---|---|---|---|
+| `.manual` | 1 | App → server | Dispatch `.connect` or `.startBrowsing` explicitly |
+| `.connectOnLaunch(host:port:)` | 1 | App → server | Fixed IP; good for CI / lab networks |
+| `.browseOnLaunch(serviceType:)` | 1 | App → server | Auto-browse; user picks from list |
+| `.advertiseAcceptAll(serviceType:serviceName:)` | 3 🔜 | Server → app | Best UX; requires native devtools |
+| `.advertise(serviceType:serviceName:accept:)` | 3 🔜 | Server → app | Controlled pairing |
+
+### Mode 1 — `.manual`
+
+User dispatches actions from a debug settings screen or shake gesture:
+
+```swift
+// Connect to a known server
+store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
+
+// Or browse and pick
+store.dispatch(.devTools(.startBrowsing))
+// → DevToolsState.discoveredServices fills
+// → User taps a row:
+store.dispatch(.devTools(.connectToService(selectedService)))
+// → Automatically resolves host:port and connects
+```
+
+### Mode 2 — `.connectOnLaunch`
+
+```swift
+devTools: .live(connectionMode: .connectOnLaunch(host: "192.168.1.100", port: 8000))
+
+// At app start:
+store.dispatch(.devTools(.activate))  // immediately connects
+```
+
+### Mode 3 — `.browseOnLaunch`
+
+```swift
+devTools: .live(connectionMode: .browseOnLaunch)  // uses "_reduxdevtools._tcp."
+
+// At app start:
+store.dispatch(.devTools(.activate))  // immediately starts browsing
+
+// Present DevToolsState.discoveredServices in your debug UI.
+// When user picks:
+store.dispatch(.devTools(.connectToService(selectedService)))
+```
+
+### Modes 4 & 5 — `.advertise*` (Phase 3)
+
+```swift
+// Pre-wire the mode now; connection will work once native devtools ships
+devTools: .live(connectionMode: .advertiseAcceptAll)
+
+// At app start:
+store.dispatch(.devTools(.activate))  // no-op until Phase 3 is implemented
+```
+
+---
+
 ## Requirements
 
 - iOS 16 / macOS 13 / tvOS 16 / watchOS 9
@@ -102,14 +203,33 @@ let appBehavior = Behavior.combine(
 )
 ```
 
-### 3. Connect
+### 3. Activate
+
+Dispatch `activate` once at app startup. The behavior reads `connectionMode` from the
+environment and starts the appropriate connection flow automatically.
 
 ```swift
-// Hardcode an IP (useful for CI / known networks)
+// In @main / App body, after the store is created:
+#if DEBUG
+store.dispatch(.devTools(.activate))
+#endif
+```
+
+With `.live()` (default `.manual` mode) this is a no-op — you can still trigger the
+connection manually from a debug settings screen:
+
+```swift
+// Manual connect to known IP
 store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
 
-// Or browse the local network for a remotedev-server automatically
+// Browse and pick from list
 store.dispatch(.devTools(.startBrowsing))
+// Then when the user picks a discovered service:
+store.dispatch(.devTools(.connectToService(selectedService)))
+
+// Or configure the mode in the environment so activate handles it:
+// devTools: .live(connectionMode: .connectOnLaunch(host: "192.168.1.100", port: 8000))
+// devTools: .live(connectionMode: .browseOnLaunch)
 ```
 
 ---
@@ -428,11 +548,14 @@ Engine.io ping/pong (`2` / `3`) is handled transparently.
 ## Roadmap
 
 - [x] Phase 1 — action monitoring, connection lifecycle, Bonjour discovery
+- [x] Phase 1 — `ConnectionMode` enum: `.manual`, `.connectOnLaunch`, `.browseOnLaunch`
+- [x] Phase 1 — `DevToolsAction.activate` reads mode from environment; `connectToService` convenience
 - [x] Phase 2 — time travel (`JUMP_TO_ACTION`, `JUMP_TO_STATE`) via JSON ring buffer
 - [x] Phase 2 — `TOGGLE_ACTION` with nearest-snapshot approximation
 - [x] Phase 2 — `IMPORT_STATE` full history import
 - [x] Phase 2 — `PAUSE_RECORDING` / `LOCK_CHANGES`
 - [x] Phase 2 — automatic `JSONEncoder`/`JSONDecoder` for `AppState: Codable`
+- [x] Phase 2 — dispatch actions from devtools Dispatcher tab (`AppAction: Decodable`)
 - [x] Phase 2 — bounded ring buffer (memory-efficient on iOS)
-- [ ] Phase 3 — Native Swift devtools app (replaces Electron `remotedev-server`)
+- [ ] Phase 3 — native Swift devtools app (phone-as-server; `ConnectionMode.advertise*`)
 - [ ] Phase 3 — Linux support via NIO WebSocket backend

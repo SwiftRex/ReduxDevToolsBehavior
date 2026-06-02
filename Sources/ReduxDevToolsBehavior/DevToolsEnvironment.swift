@@ -66,6 +66,25 @@ public struct DevToolsEnvironment: Sendable {
     /// Human-readable label in the devtools panel sidebar. `nil` falls back to `instanceId`.
     public var instanceName: String?
 
+    // MARK: - Connection mode
+
+    /// Controls how the connection is established when ``DevToolsAction/activate``
+    /// is dispatched. Defaults to ``ConnectionMode/manual``.
+    public var connectionMode: ConnectionMode
+
+    /// The Bonjour service type used by ``DevToolsAction/startBrowsing``.
+    ///
+    /// Derived from `connectionMode` when it carries a service type; otherwise
+    /// falls back to `"_reduxdevtools._tcp."`.
+    public var browsingServiceType: String {
+        switch connectionMode {
+        case let .browseOnLaunch(type):     return type
+        case let .advertiseAcceptAll(type, _): return type
+        case let .advertise(type, _, _):    return type
+        default:                            return "_reduxdevtools._tcp."
+        }
+    }
+
     // MARK: - Init
 
     public init(
@@ -74,7 +93,8 @@ public struct DevToolsEnvironment: Sendable {
         browseServices: @escaping @Sendable (String) -> DeferredStream<Result<DiscoveredServiceEvent, Error>>,
         resolveService: @escaping @Sendable (DiscoveredService) -> DeferredTask<Result<ResolvedService, Error>>,
         instanceId: String,
-        instanceName: String? = nil
+        instanceName: String? = nil,
+        connectionMode: ConnectionMode = .manual
     ) {
         self.connectionManager = connectionManager
         self.openConnection    = openConnection
@@ -82,6 +102,7 @@ public struct DevToolsEnvironment: Sendable {
         self.resolveService    = resolveService
         self.instanceId        = instanceId
         self.instanceName      = instanceName
+        self.connectionMode    = connectionMode
     }
 }
 
@@ -92,4 +113,13 @@ public enum DiscoveredServiceEvent: Sendable {
     case found(DiscoveredService)
     case removed(DiscoveredService)
     case updated(from: DiscoveredService, to: DiscoveredService)
+}
+
+// MARK: - Errors
+
+/// Errors originating from the devtools behavior.
+public enum DevToolsError: Error {
+    /// ``DevToolsAction/connectToService(_:)`` was dispatched but the service
+    /// could not be resolved to a host and port.
+    case couldNotResolveService(DiscoveredService)
 }

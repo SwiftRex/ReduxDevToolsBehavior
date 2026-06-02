@@ -258,6 +258,41 @@ public enum DevToolsBehavior {
         Behavior { action, _ in
             switch action {
 
+            case .activate:
+                // Read connectionMode from the environment and dispatch the appropriate action.
+                return .produce { ctx in
+                    switch ctx.environment.connectionMode {
+                    case .manual:
+                        return .empty
+                    case let .connectOnLaunch(host, port):
+                        return .just(.connect(host: host, port: port))
+                    case .browseOnLaunch:
+                        // The serviceType from the mode is stored in the environment and
+                        // will be used by .startBrowsing → env.browseServices(serviceType).
+                        // Phase 3 note: pass the custom serviceType through here.
+                        return .just(.startBrowsing)
+                    case .advertiseAcceptAll, .advertise:
+                        // Phase 3 — not yet implemented; native Swift devtools required
+                        return .empty
+                    }
+                }
+
+            case let .connectToService(service):
+                // Resolve the Bonjour service to a concrete host:port, then connect.
+                return .produce { ctx in
+                    Effect.task {
+                        switch await ctx.environment.resolveService(service).run() {
+                        case let .success(resolved):
+                            guard let host = resolved.preferredHost, let port = resolved.port else {
+                                return ._connectionFailed(DevToolsError.couldNotResolveService(service))
+                            }
+                            return .connect(host: host, port: port)
+                        case let .failure(error):
+                            return ._connectionFailed(error)
+                        }
+                    }
+                }
+
             case let .connect(host, port):
                 return .reduce { $0.connectionStatus = .connecting }
                     .produce { ctx in
@@ -272,7 +307,7 @@ public enum DevToolsBehavior {
                 return .reduce { $0.isBrowsing = true }
                     .produce { ctx in
                         Effect<DevToolsAction>.deferredStream(
-                            ctx.environment.browseServices("_reduxdevtools._tcp."),
+                            ctx.environment.browseServices(ctx.environment.browsingServiceType),
                             {
                                 switch $0 {
                                 case let .success(.found(svc)):   return ._serviceFound(svc)

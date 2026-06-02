@@ -25,10 +25,40 @@ import Foundation
 /// be dispatched by application code directly.
 public enum DevToolsAction: Sendable {
 
+    // MARK: - Startup
+
+    /// Reads ``DevToolsEnvironment/connectionMode`` from the environment and starts the
+    /// appropriate connection flow.
+    ///
+    /// Dispatch this **once** at app launch, after the store is ready:
+    ///
+    /// ```swift
+    /// // @main / App body / SceneDelegate, after store is created:
+    /// store.dispatch(.devTools(.activate))
+    /// ```
+    ///
+    /// - `.manual` → no-op; use ``connect(host:port:)`` or ``startBrowsing`` explicitly.
+    /// - `.connectOnLaunch(host:port:)` → dispatches ``connect(host:port:)`` immediately.
+    /// - `.browseOnLaunch(serviceType:)` → dispatches ``startBrowsing``.
+    /// - `.advertise*` → no-op until Phase 3 native devtools is implemented.
+    case activate
+
     // MARK: - User-initiated
 
     /// Connect to a remotedev-server at the given host and port.
     case connect(host: String, port: UInt16)
+
+    /// Resolves `service` to a concrete host and port, then connects.
+    ///
+    /// Convenience for Mode 3 (`browseOnLaunch`): after the user picks a service from
+    /// ``DevToolsState/discoveredServices``, dispatch this instead of manually calling
+    /// ``DevToolsEnvironment/resolveService`` and then ``connect(host:port:)``.
+    ///
+    /// ```swift
+    /// // User taps a row in the discovered services list:
+    /// store.dispatch(.devTools(.connectToService(selectedService)))
+    /// ```
+    case connectToService(DiscoveredService)
 
     /// Browse the local network for remotedev-servers via Bonjour.
     case startBrowsing
