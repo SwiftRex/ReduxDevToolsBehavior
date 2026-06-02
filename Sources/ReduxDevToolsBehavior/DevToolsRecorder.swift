@@ -27,25 +27,28 @@ import SwiftRexConcurrency
 ///
 /// ## Phase 2 (time travel + toggle + import)
 ///
-/// Requires `AppState: Decodable` and `AppAction` to carry a restore case:
+/// When `AppState: Decodable`, use the ``makeDevToolsRecorder(_:instanceName:extractDevToolsAction:restoreStateAction:serialize:)-Decodable``
+/// overload — `deserializeState` is wired automatically via `JSONDecoder`:
 ///
 /// ```swift
-/// // AppAction
-/// #if DEBUG
-/// case restoreState(AppState)
-/// #endif
+/// // AppAction + AppState both Codable — zero-config encoding AND decoding
+/// makeDevToolsRecorder(
+///     instanceId: Bundle.main.bundleIdentifier ?? "app",
+///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+///     restoreStateAction: { .restoreState($0) }
+///     // deserializeState is automatic — JSONDecoder used because AppState: Decodable
+/// )
+/// .liftEnvironment(\AppEnvironment.devTools)
+/// ```
 ///
-/// // Behavior / Reducer:
-/// case .restoreState(let s): state = s
+/// When `AppState` is NOT `Decodable`, supply `deserializeState` explicitly:
 ///
-/// // Wiring:
+/// ```swift
 /// makeDevToolsRecorder(
 ///     instanceId: Bundle.main.bundleIdentifier ?? "app",
 ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
 ///     restoreStateAction: { .restoreState($0) },
-///     deserializeState: { json in
-///         json.data(using: .utf8).flatMap { try? JSONDecoder().decode(AppState.self, from: $0) }
-///     }
+///     deserializeState: { json in myCustomDecode(json) }
 /// )
 /// .liftEnvironment(\AppEnvironment.devTools)
 /// ```
@@ -117,6 +120,50 @@ public func makeDevToolsRecorder<AppAction: Sendable, AppState: Sendable>(
             }
         }
     }
+}
+
+// MARK: - Decodable overload (auto-wires JSONDecoder)
+
+/// Overload for when `AppState: Decodable`.
+///
+/// `deserializeState` is wired automatically using `JSONDecoder`, making time travel
+/// and toggle zero-config when `AppState` is `Codable`. Encoding uses `JSONEncoder`
+/// automatically too (via the `Encodable` fast-path in ``MirrorJSON``).
+///
+/// This is the overload to use when `AppState: Codable`:
+///
+/// ```swift
+/// // AppState: Codable — fully automatic encode + decode
+/// makeDevToolsRecorder(
+///     instanceId: "my-app",
+///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
+///     restoreStateAction: { .restoreState($0) }
+/// )
+/// ```
+///
+/// When `AppState` does not conform to `Decodable`, the compiler falls back to
+/// the base overload and `deserializeState` must be provided explicitly (or omitted
+/// to disable time travel).
+public func makeDevToolsRecorder<AppAction: Sendable, AppState: Decodable & Sendable>(
+    instanceId: String,
+    instanceName: String? = nil,
+    extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+    restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
+    serialize: @escaping @Sendable (AppAction, AppState?) -> (action: String, state: String)
+        = { action, state in
+            (MirrorJSON.encode(action), state.map { MirrorJSON.encode($0 as Any) } ?? "{}")
+        }
+) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
+    makeDevToolsRecorder(
+        instanceId: instanceId,
+        instanceName: instanceName,
+        extractDevToolsAction: extractDevToolsAction,
+        restoreStateAction: restoreStateAction,
+        deserializeState: { json in
+            json.data(using: .utf8).flatMap { try? JSONDecoder().decode(AppState.self, from: $0) }
+        },
+        serialize: serialize
+    )
 }
 
 // MARK: - DevTools command handling
