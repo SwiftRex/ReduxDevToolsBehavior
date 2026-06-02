@@ -82,12 +82,21 @@ public struct DevToolsEnvironment: Sendable {
     /// Decodes a JSON string back to `AppState` (type-erased as `Any`).
     ///
     /// Required for time travel (`JUMP_TO_ACTION`, `TOGGLE_ACTION`) and
-    /// `IMPORT_STATE`. `nil` disables state restoration — ``DevToolsBehavior``
-    /// still monitors actions but cannot restore them.
+    /// `IMPORT_STATE`. `nil` disables state restoration.
     ///
     /// When `AppState: Decodable` use `.live(for: AppState.self)` to wire
     /// this automatically via `JSONDecoder`.
     public var decodeState: (@Sendable (String) -> Any?)?
+
+    /// Decodes a JSON string from the Redux DevTools "Dispatcher" tab back to
+    /// `AppAction` (type-erased as `Any`).
+    ///
+    /// Required for dispatching actions from the devtools panel. `nil` (default)
+    /// silently discards `ACTION` commands from the devtools.
+    ///
+    /// When `AppAction: Decodable` use `.live(for: AppState.self, action: AppAction.self)`
+    /// to wire this automatically via `JSONDecoder`.
+    public var decodeAction: (@Sendable (String) -> Any?)?
 
     // MARK: - Init
 
@@ -102,7 +111,8 @@ public struct DevToolsEnvironment: Sendable {
         encodeState: @escaping @Sendable (Any?) -> String = { state in
             state.map(MirrorJSON.encode) ?? "{}"
         },
-        decodeState: (@Sendable (String) -> Any?)? = nil
+        decodeState: (@Sendable (String) -> Any?)? = nil,
+        decodeAction: (@Sendable (String) -> Any?)? = nil
     ) {
         self.connectionManager = connectionManager
         self.openConnection    = openConnection
@@ -113,6 +123,7 @@ public struct DevToolsEnvironment: Sendable {
         self.encodeAction      = encodeAction
         self.encodeState       = encodeState
         self.decodeState       = decodeState
+        self.decodeAction      = decodeAction
     }
 }
 

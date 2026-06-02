@@ -304,6 +304,11 @@ public enum DevToolsBehavior {
             case .unlockChanges:
                 return .reduce { $0.isLocked = false }
                     .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(false) } }
+
+            case .dispatchAction:
+                // Handled by timeMachineBehavior which knows the concrete AppAction type.
+                // socketBehavior has no state mutation or side effect to perform here.
+                return .doNothing
             }
         }
 
@@ -320,14 +325,15 @@ private func socketCommandConsequence(
     _ command: RemoteDevCommand
 ) -> Consequence<DevToolsState, DevToolsEnvironment, DevToolsAction> {
     switch command {
-    case let .jumpToAction(index):    return .produce { _ in .just(.jumpToAction(index)) }
-    case let .jumpToState(index):     return .produce { _ in .just(.jumpToState(index)) }
-    case let .toggleAction(id):       return .produce { _ in .just(.toggleAction(id)) }
-    case .reset:                      return .produce { _ in .just(.reset) }
-    case .commit:                     return .produce { _ in .just(.commit) }
-    case .rollback:                   return .produce { _ in .just(.rollback) }
-    case let .pauseRecording(paused): return .produce { _ in .just(paused ? .pause : .resume) }
-    case let .lockChanges(locked):    return .produce { _ in .just(locked ? .lockChanges : .unlockChanges) }
+    case let .jumpToAction(index):           return .produce { _ in .just(.jumpToAction(index)) }
+    case let .jumpToState(index):            return .produce { _ in .just(.jumpToState(index)) }
+    case let .toggleAction(id):              return .produce { _ in .just(.toggleAction(id)) }
+    case .reset:                             return .produce { _ in .just(.reset) }
+    case .commit:                            return .produce { _ in .just(.commit) }
+    case .rollback:                          return .produce { _ in .just(.rollback) }
+    case let .pauseRecording(paused):        return .produce { _ in .just(paused ? .pause : .resume) }
+    case let .lockChanges(locked):           return .produce { _ in .just(locked ? .lockChanges : .unlockChanges) }
+    case let .dispatchFromDevTools(json):    return .produce { _ in .just(.dispatchAction(actionJSON: json)) }
     case let .importState(json):
         if let lifted = ImportedLiftedState.from(json: json) {
             return .produce { _ in .just(.importState(lifted)) }

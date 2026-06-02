@@ -59,6 +59,7 @@ extension DevToolsEnvironment {
             state.map(MirrorJSON.encode) ?? "{}"
         },
         decodeState: (@Sendable (String) -> Any?)? = nil,
+        decodeAction: (@Sendable (String) -> Any?)? = nil,
         urlSession: URLSession = .shared
     ) -> DevToolsEnvironment {
         let manager = DevToolsConnectionManager(maxHistorySize: maxHistorySize)
@@ -95,11 +96,12 @@ extension DevToolsEnvironment {
             instanceName:  instanceName,
             encodeAction:  encodeAction,
             encodeState:   encodeState,
-            decodeState:   decodeState
+            decodeState:   decodeState,
+            decodeAction:  decodeAction
         )
     }
 
-    // MARK: - Codable overload
+    // MARK: - Codable overloads
 
     /// Creates a live environment with `JSONEncoder`/`JSONDecoder` wired automatically
     /// for `AppState: Codable`.
@@ -156,9 +158,48 @@ extension DevToolsEnvironment {
             urlSession: urlSession
         )
     }
+
+    // MARK: - Both state and action Codable
+
+    /// Creates a live environment with `JSONDecoder` wired for both state restoration
+    /// (time travel) and action dispatch from the devtools "Dispatcher" tab.
+    ///
+    /// ```swift
+    /// // AppState: Codable, AppAction: Codable — full bidirectional devtools integration
+    /// devTools: .live(for: AppState.self, action: AppAction.self)
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - stateType:  The concrete `AppState` type. Pass `AppState.self`.
+    ///   - actionType: The concrete `AppAction` type. Pass `AppAction.self`.
+    ///     Must be `Decodable` so the devtools Dispatcher tab can deserialize typed actions.
+    public static func live<S: Codable & Sendable, A: Decodable & Sendable>(
+        for stateType: S.Type,
+        action actionType: A.Type,
+        instanceId: String = Bundle.main.bundleIdentifier ?? "app",
+        instanceName: String? = nil,
+        maxHistorySize: Int = 200,
+        bonjourServiceType: String = "_reduxdevtools._tcp.",
+        urlSession: URLSession = .shared
+    ) -> DevToolsEnvironment {
+        let decoder = JSONDecoder()
+
+        var env = live(
+            for: stateType,
+            instanceId: instanceId,
+            instanceName: instanceName,
+            maxHistorySize: maxHistorySize,
+            bonjourServiceType: bonjourServiceType,
+            urlSession: urlSession
+        )
+        env.decodeAction = { json in
+            json.data(using: .utf8).flatMap { try? decoder.decode(A.self, from: $0) }
+        }
+        return env
+    }
 }
 
-// MARK: - Socket.io handshake
+// MARK: - Socket.io handshake (file-level private functions)
 
 private func performSocketIOHandshake(
     connection: WebSocketConnection

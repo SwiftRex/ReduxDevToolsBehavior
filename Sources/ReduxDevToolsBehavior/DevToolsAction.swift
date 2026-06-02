@@ -82,6 +82,19 @@ public enum DevToolsAction: Sendable {
     /// Import a full devtools lifted-state snapshot (replaces history).
     case importState(ImportedLiftedState)
 
+    // MARK: - Action dispatch from devtools
+
+    /// An action was dispatched from the Redux DevTools "Dispatcher" tab.
+    ///
+    /// `actionJSON` is the raw JSON string the developer typed in the panel.
+    /// The time machine behavior decodes it via ``DevToolsEnvironment/decodeAction``
+    /// and dispatches the result back into the store as an `AppAction`.
+    ///
+    /// Requires `DevToolsEnvironment.decodeAction` to be set — either automatically
+    /// via `.live(for: AppState.self, action: AppAction.self)` when `AppAction: Decodable`,
+    /// or manually via `.live(decodeAction:)`.
+    case dispatchAction(actionJSON: String)
+
     // MARK: - Recording control
 
     /// Pause recording — new actions will not be forwarded to the devtools panel.

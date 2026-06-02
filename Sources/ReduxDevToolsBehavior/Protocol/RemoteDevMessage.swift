@@ -84,6 +84,10 @@ public enum RemoteDevCommand: Sendable {
 
     // MARK: - Unknown
 
+    /// An action dispatched from the devtools "Dispatcher" tab.
+    /// `actionJSON` is the raw JSON string typed by the developer.
+    case dispatchFromDevTools(actionJSON: String)
+
     /// Any unrecognised or future command type.
     case unknown(String)
 
@@ -107,6 +111,20 @@ public enum RemoteDevCommand: Sendable {
         case "RESET":    return .reset
         case "COMMIT":   return .commit
         case "ROLLBACK": return .rollback
+        case "ACTION":
+            // Dispatched from the devtools "Dispatcher" tab.
+            // The action field may be a JSON string or an already-decoded object.
+            let actionJSON: String
+            if let raw = obj["action"] as? String {
+                actionJSON = raw
+            } else if let obj = obj["action"],
+                      let data = try? JSONSerialization.data(withJSONObject: obj),
+                      let str  = String(data: data, encoding: .utf8) {
+                actionJSON = str
+            } else {
+                actionJSON = "{}"
+            }
+            return .dispatchFromDevTools(actionJSON: actionJSON)
         case "IMPORT_STATE":
             let raw = (try? JSONSerialization.data(withJSONObject: obj["nextLiftedState"] ?? "{}"))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"

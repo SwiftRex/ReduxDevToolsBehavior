@@ -81,6 +81,18 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
             }
         }
 
+    case let .dispatchAction(actionJSON: json):
+        // Decode the action JSON typed in the devtools "Dispatcher" tab and dispatch
+        // it into the store as a real AppAction. Independent of time travel —
+        // decodeAction works even when restoreStateAction is nil.
+        // The decoded action flows through the store normally and is recorded on
+        // the next cycle just like any other dispatched action.
+        return .produce { ctx in
+            Effect.task {
+                ctx.environment.decodeAction?(json) as? AppAction
+            }
+        }
+
     case .pause:
         return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(true) } }
     case .resume:
