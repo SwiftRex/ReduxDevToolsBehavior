@@ -26,21 +26,49 @@ Phone ──WebSocket──▶ remotedev-server ◀──── Redux DevTools p
 ```
 
 The phone is the **client**. Both the phone and the devtools panel connect to a relay
-server (`remotedev-server`). The server must already be running before the phone connects.
+server (`remotedev-server`). The server must be running on the Mac before the phone
+connects.
 
-### Phase 3 — phone is the server (native Swift devtools, roadmap)
+The existing unmodified Electron Redux DevTools app **cannot** initiate a connection to
+the phone — it has no Bonjour browser and only speaks to its own backend relay.
+
+### Phase 3 — phone is the server (roadmap)
+
+The connection direction reverses: the phone runs a WebSocket server; the devtools
+connects to it. Three stepping stones, each building on the last:
+
+**3a — existing Electron devtools, manual IP** *(fastest to implement)*
 
 ```
-Phone ◀──WebSocket──── native Swift devtools
-(NWListener + Bonjour)   (browses, connects)
+Electron devtools ──Socket.io──▶ iOS app (WebSocket server, manual IP)
 ```
 
-The phone is the **server**. No relay, no configuration. The devtools browses Bonjour,
-finds every advertising phone on the network, and connects automatically. This is the
-ideal developer UX — open the devtools and all running debug builds appear.
+The phone implements the relay protocol from the server side. The developer configures
+the Electron devtools to connect to the phone's IP:port instead of localhost. No changes
+to the Electron app; no Bonjour auto-discovery.
 
-**Not yet implemented.** See `ConnectionMode.advertiseAcceptAll` and
-`ConnectionMode.advertise` which are pre-wired in the API for Phase 3.
+**3b — modified remotedev-server + Bonjour**
+
+```
+Electron devtools ──Socket.io──▶ remotedev-server (with Bonjour browse) ──▶ iOS app server
+```
+
+A small PR to the open-source `remotedev-server` (Node.js) adds Bonjour browsing
+(`npm install bonjour`) to auto-discover advertising phones and route traffic to them.
+
+**3c — native Swift devtools** *(ideal UX)*
+
+```
+Phone ◀──WebSocket──── native Swift devtools app
+(NWListener + Bonjour)   (NWBrowser, connects automatically)
+```
+
+The devtools browses Bonjour, finds every advertising phone on the network, and connects
+automatically. Open the devtools — all running debug builds appear. No configuration.
+
+**None of Phase 3 is implemented yet.** `ConnectionMode.advertiseAcceptAll` and
+`ConnectionMode.advertise` are pre-wired in the API so the behavior already has the
+right shape when server-side support is added.
 
 ---
 
@@ -557,5 +585,7 @@ Engine.io ping/pong (`2` / `3`) is handled transparently.
 - [x] Phase 2 — automatic `JSONEncoder`/`JSONDecoder` for `AppState: Codable`
 - [x] Phase 2 — dispatch actions from devtools Dispatcher tab (`AppAction: Decodable`)
 - [x] Phase 2 — bounded ring buffer (memory-efficient on iOS)
-- [ ] Phase 3 — native Swift devtools app (phone-as-server; `ConnectionMode.advertise*`)
+- [ ] Phase 3a — phone as server, existing Electron devtools with manual IP (no relay needed)
+- [ ] Phase 3b — modified remotedev-server with Bonjour auto-discovery (Node.js PR)
+- [ ] Phase 3c — native Swift devtools app (full Bonjour, zero config)
 - [ ] Phase 3 — Linux support via NIO WebSocket backend
