@@ -2,11 +2,11 @@ import Foundation
 
 /// State managed by ``DevToolsBehavior``.
 ///
-/// Embed this in your app state and lift the behavior to it:
+/// Embed this in your app state under `#if DEBUG`:
 ///
 /// ```swift
-/// struct AppState {
-///     // ...your state...
+/// struct AppState: Sendable {
+///     var counter: CounterState
 ///     #if DEBUG
 ///     var devTools: DevToolsState = .initial
 ///     #endif
@@ -35,12 +35,32 @@ public struct DevToolsState: Sendable {
 
     /// Serialized state snapshots (JSON strings), one per dispatched action.
     /// Index 0 = initial state; index N = state after the Nth action.
-    /// Used by the devtools panel for time travel.
+    /// Sent to the devtools panel for display and import/export.
     public var stateHistory: [String]
 
     /// Serialized action descriptions (JSON strings), one per dispatched action.
-    /// Parallel array to `stateHistory`.
+    /// Parallel to `stateHistory`.
     public var actionHistory: [String]
+
+    // MARK: - Time travel
+
+    /// Actions that have been toggled (skipped) by the devtools panel.
+    /// Skipped actions are excluded when computing the current state.
+    public var skippedActionIds: Set<Int>
+
+    /// The action index currently displayed in the devtools panel, or `nil` when live.
+    public var currentActionIndex: Int?
+
+    // MARK: - Recording control
+
+    /// `true` while the devtools panel has paused recording. New app actions
+    /// are silently dropped when paused — no INIT / ACTION messages are sent.
+    public var isPaused: Bool
+
+    /// `true` while the devtools panel has locked state changes. The behavior
+    /// surfaces `.lockChanges` / `.unlockChanges` so the app's reducer can
+    /// refuse or accept dispatches accordingly.
+    public var isLocked: Bool
 
     // MARK: - Defaults
 
@@ -49,7 +69,11 @@ public struct DevToolsState: Sendable {
         discoveredServices: [],
         isBrowsing: false,
         stateHistory: [],
-        actionHistory: []
+        actionHistory: [],
+        skippedActionIds: [],
+        currentActionIndex: nil,
+        isPaused: false,
+        isLocked: false
     )
 
     public init(
@@ -57,20 +81,28 @@ public struct DevToolsState: Sendable {
         discoveredServices: [DiscoveredService],
         isBrowsing: Bool,
         stateHistory: [String],
-        actionHistory: [String]
+        actionHistory: [String],
+        skippedActionIds: Set<Int>,
+        currentActionIndex: Int?,
+        isPaused: Bool,
+        isLocked: Bool
     ) {
         self.connectionStatus = connectionStatus
         self.discoveredServices = discoveredServices
         self.isBrowsing = isBrowsing
         self.stateHistory = stateHistory
         self.actionHistory = actionHistory
+        self.skippedActionIds = skippedActionIds
+        self.currentActionIndex = currentActionIndex
+        self.isPaused = isPaused
+        self.isLocked = isLocked
     }
 }
 
 // MARK: - Convenience
 
 extension DevToolsState {
-    var isConnected: Bool {
+    public var isConnected: Bool {
         if case .connected = connectionStatus { return true }
         return false
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Actions handled by ``DevToolsBehavior``.
+/// Actions handled by ``DevToolsBehavior`` and optionally intercepted by ``makeDevToolsRecorder``.
 ///
 /// Add a `devTools` case to your `AppAction` and use `AppAction.prism.devTools`
 /// when lifting the behavior into your app:
@@ -14,17 +14,15 @@ import Foundation
 /// }
 /// ```
 ///
-/// Then connect from your app's launch or settings screen:
+/// Dispatch user-facing cases from your UI or launch code:
 ///
 /// ```swift
 /// store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
-/// ```
-///
-/// Or let the behavior browse for a remotedev-server automatically:
-///
-/// ```swift
 /// store.dispatch(.devTools(.startBrowsing))
 /// ```
+///
+/// Cases prefixed with `_` are dispatched by behavior effects and should not
+/// be dispatched by application code directly.
 public enum DevToolsAction: Sendable {
 
     // MARK: - User-initiated
@@ -63,18 +61,38 @@ public enum DevToolsAction: Sendable {
 
     // MARK: - Commands surfaced from received messages
 
-    /// The devtools panel requested time-travel to the action at `index`.
+    /// Time-travel: restore the state produced by action at `index`.
     case jumpToAction(Int)
 
-    /// The devtools panel toggled (skipped/re-enabled) the action at `index`.
+    /// Time-travel: jump directly to the pre-computed state at `index`.
+    case jumpToState(Int)
+
+    /// Toggle (skip / re-enable) the action at `id` and restore the nearest valid state.
     case toggleAction(Int)
 
-    /// The devtools panel requested a reset to the initial state.
+    /// Reset the store to its initial state and clear all history.
     case reset
 
-    /// The devtools panel committed the current state as the new baseline.
+    /// Commit the current state as the new baseline and clear the history.
     case commit
 
-    /// The devtools panel rolled back to the previous commit.
+    /// Roll back to the state before the last committed checkpoint.
     case rollback
+
+    /// Import a full devtools lifted-state snapshot (replaces history).
+    case importState(ImportedLiftedState)
+
+    // MARK: - Recording control
+
+    /// Pause recording — new actions will not be forwarded to the devtools panel.
+    case pause
+
+    /// Resume recording after a ``pause``.
+    case resume
+
+    /// Lock state changes — the devtools panel will not be able to modify the store.
+    case lockChanges
+
+    /// Unlock state changes.
+    case unlockChanges
 }

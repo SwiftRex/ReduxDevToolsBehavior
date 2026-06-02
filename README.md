@@ -353,10 +353,83 @@ Engine.io ping/pong frames (`2` / `3`) are handled transparently.
 
 ---
 
+## Phase 2: Time travel and toggle
+
+Supply `extractDevToolsAction` and `restoreStateAction` to `makeDevToolsRecorder` to
+enable in-process state restoration — no JSON round-trip required.
+
+### How it works
+
+The recorder stores actual typed `AppState` snapshots in the `DevToolsConnectionManager`
+actor (one per dispatched action). When the devtools panel requests a jump, toggle, or
+import, the recorder retrieves the right snapshot and dispatches `restoreStateAction(snapshot)`
+back into the store.
+
+### TOGGLE_ACTION approximation
+
+Redux DevTools' full `TOGGLE_ACTION` re-runs all non-skipped actions through the reducer
+from scratch. Since we can't expose your reducer to external code, we approximate:
+
+- **Skip action N** → restore the snapshot just before N (state N-1, or the nearest
+  non-skipped state before it).
+- **Un-skip action N** → restore snapshot N as if it had never been skipped.
+
+This is accurate for most cases. The only difference from the full approach is that
+actions following a toggled one are not re-applied — they remain as originally computed.
+
+### IMPORT_STATE
+
+Supply `deserializeState` to decode the JSON snapshots from the devtools panel and
+restore any state index. Without it, `IMPORT_STATE` still updates the skip set and
+the JSON history but cannot restore actual `AppState` objects.
+
+### Full Phase 2 wiring example
+
+```swift
+makeDevToolsRecorder(
+    instanceId: Bundle.main.bundleIdentifier ?? "app",
+    instanceName: "My App",
+    extractDevToolsAction: { appAction in
+        if case .devTools(let dt) = appAction { return dt }
+        return nil
+    },
+    restoreStateAction: { .devTools(.restoreState($0)) },
+    deserializeState: { json in
+        json.data(using: .utf8).flatMap { try? JSONDecoder().decode(AppState.self, from: $0) }
+    },
+    serialize: { action, state in
+        let encoder = JSONEncoder()
+        let actionJSON = (try? encoder.encode(action)).flatMap { String(data: $0, encoding: .utf8) }
+                         ?? MirrorJSON.encode(action)
+        let stateJSON  = state.flatMap { (try? encoder.encode($0)).flatMap { String(data: $0, encoding: .utf8) } }
+                         ?? "{}"
+        return (actionJSON, stateJSON)
+    }
+)
+.liftEnvironment(\AppEnvironment.devTools)
+```
+
+```swift
+// AppAction
+enum AppAction {
+    // ...
+    #if DEBUG
+    case devTools(DevToolsAction)
+    case restoreState(AppState)
+    #endif
+}
+
+// In your Behavior or Reducer:
+case .restoreState(let snapshot):
+    state = snapshot
+```
+
 ## Roadmap
 
 - [x] Phase 1 — monitoring, connection lifecycle, devtools commands surfaced to app
-- [ ] Phase 2 — `TOGGLE_ACTION` implementation (skip/re-enable)
-- [ ] Phase 2 — `IMPORT_STATE` full state override
-- [ ] Phase 2 — Native Swift devtools app (replaces Electron `remotedev-server`)
-- [ ] Phase 2 — Linux support via NIO WebSocket backend
+- [x] Phase 2 — `TOGGLE_ACTION` (skip/re-enable with nearest-snapshot approximation)
+- [x] Phase 2 — `IMPORT_STATE` full history override (with optional `deserializeState`)
+- [x] Phase 2 — `PAUSE_RECORDING` / `LOCK_CHANGES` wired through manager and state
+- [x] Phase 2 — `JUMP_TO_STATE` (direct state-index variant of JUMP_TO_ACTION)
+- [ ] Phase 3 — Native Swift devtools app (replaces Electron `remotedev-server`)
+- [ ] Phase 3 — Linux support via NIO WebSocket backend

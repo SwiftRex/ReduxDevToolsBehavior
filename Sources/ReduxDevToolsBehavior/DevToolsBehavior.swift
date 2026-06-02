@@ -6,64 +6,12 @@ import WebSocketClient
 
 /// The Redux DevTools connection behavior.
 ///
-/// `DevToolsBehavior` manages the lifecycle of the connection to a
-/// `remotedev-server` and routes commands received from the devtools panel
-/// (time travel, reset, commit, etc.) back into the store as `DevToolsAction`.
+/// `DevToolsBehavior` manages the connection lifecycle and routes all commands
+/// received from the devtools panel back into the store as ``DevToolsAction`` values.
+/// Time travel, toggle, import, pause, and lock are all handled here.
 ///
-/// It does **not** observe app actions — pair it with ``makeDevToolsRecorder``
-/// to forward every dispatched action and state snapshot to the devtools.
-///
-/// ## Wiring
-///
-/// ```swift
-/// // AppAction
-/// enum AppAction {
-///     case yourFeatureAction(FeatureAction)
-///     #if DEBUG
-///     case devTools(DevToolsAction)
-///     #endif
-/// }
-///
-/// // AppState
-/// struct AppState {
-///     var yourState: FeatureState
-///     #if DEBUG
-///     var devTools: DevToolsState = .initial
-///     #endif
-/// }
-///
-/// // AppEnvironment
-/// struct AppEnvironment {
-///     var feature: FeatureEnvironment
-///     #if DEBUG
-///     var devTools: DevToolsEnvironment = .live()
-///     #endif
-/// }
-///
-/// // Combine behaviors
-/// let appBehavior = Behavior.combine(
-///     featureBehavior.lift(
-///         action: AppAction.prism.yourFeatureAction,
-///         state: \AppState.yourState,
-///         environment: \AppEnvironment.feature
-///     ),
-///     #if DEBUG
-///     DevToolsBehavior.behavior.lift(
-///         action: AppAction.prism.devTools,
-///         state: \AppState.devTools,
-///         environment: \AppEnvironment.devTools
-///     ),
-///     makeDevToolsRecorder(instanceId: Bundle.main.bundleIdentifier ?? "app")
-///         .liftEnvironment(\AppEnvironment.devTools),
-///     #endif
-/// )
-///
-/// // Connect (e.g. from a debug settings screen or on launch)
-/// store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
-///
-/// // Or browse the local network for a remotedev-server:
-/// store.dispatch(.devTools(.startBrowsing))
-/// ```
+/// Pair with ``makeDevToolsRecorder`` to forward app actions and store snapshots.
+/// See the README for full wiring instructions.
 public enum DevToolsBehavior {
     public static let behavior: Behavior<DevToolsAction, DevToolsState, DevToolsEnvironment> =
         Behavior { action, _ in
@@ -88,11 +36,11 @@ public enum DevToolsBehavior {
                     .produce { ctx in
                         Effect<DevToolsAction>.deferredStream(
                             ctx.environment.browseServices("_reduxdevtools._tcp."),
-                            { result -> DevToolsAction in
-                                switch result {
+                            {
+                                switch $0 {
                                 case let .success(.found(svc)):   return ._serviceFound(svc)
                                 case let .success(.removed(svc)): return ._serviceRemoved(svc)
-                                case .success(.updated):          return ._serviceRemoved(.init(name: "", type: "", domain: ""))  // placeholder
+                                case .success(.updated):          return ._serviceRemoved(.init(name: "", type: "", domain: ""))
                                 case let .failure(error):         return ._connectionFailed(error)
                                 }
                             },
@@ -107,15 +55,19 @@ public enum DevToolsBehavior {
             // MARK: - Disconnect
 
             case .disconnect:
-                return .reduce { $0.connectionStatus = .disconnected }
-                    .produce { ctx in
-                        Effect<DevToolsAction>.fireAndForget {
-                            await ctx.environment.connectionManager.close()
-                        }
-                        <> .cancelInFlight(id: "devtools-connection")
+                return .reduce {
+                    $0.connectionStatus = .disconnected
+                    $0.isPaused = false
+                    $0.isLocked = false
+                }
+                .produce { ctx in
+                    Effect<DevToolsAction>.fireAndForget {
+                        await ctx.environment.connectionManager.close()
                     }
+                    <> .cancelInFlight(id: "devtools-connection")
+                }
 
-            // MARK: - Internal: lifecycle events
+            // MARK: - Internal: lifecycle
 
             case let ._connected(host, port):
                 return .reduce { $0.connectionStatus = .connected(host: host, port: port) }
@@ -124,7 +76,11 @@ public enum DevToolsBehavior {
                 return .reduce { $0.connectionStatus = .disconnected }
 
             case ._connectionLost:
-                return .reduce { $0.connectionStatus = .disconnected }
+                return .reduce {
+                    $0.connectionStatus = .disconnected
+                    $0.isPaused = false
+                    $0.isLocked = false
+                }
 
             // MARK: - Internal: discovery
 
@@ -138,32 +94,53 @@ public enum DevToolsBehavior {
             case let ._serviceRemoved(svc):
                 return .reduce { $0.discoveredServices.removeAll { $0 == svc } }
 
-            // MARK: - Internal: received command from devtools
+            // MARK: - Internal: route received command
 
             case let ._received(command):
-                switch command {
-                case let .jumpToAction(index):  return .just(.jumpToAction(index))
-                case let .toggleAction(id):     return .just(.toggleAction(id))
-                case .reset:                    return .just(.reset)
-                case .commit:                   return .just(.commit)
-                case .rollback:                 return .just(.rollback)
-                case .importState, .unknown:    return .doNothing
+                return commandConsequence(command)
+
+            // MARK: - Time travel (surfaced to app; recorder handles restoration)
+
+            case let .jumpToAction(index):
+                return .reduce { $0.currentActionIndex = index }
+
+            case let .jumpToState(index):
+                return .reduce { $0.currentActionIndex = index }
+
+            case let .toggleAction(id):
+                return .reduce { state in
+                    if state.skippedActionIds.contains(id) {
+                        state.skippedActionIds.remove(id)
+                    } else {
+                        state.skippedActionIds.insert(id)
+                    }
                 }
 
-            // MARK: - Commands (surfaced to the app)
-
-            case .jumpToAction, .toggleAction:
-                // The app's reducer handles these — DevToolsBehavior does not modify AppState
-                return .doNothing
+            // MARK: - History management
 
             case .reset:
-                return .reduce { $0.stateHistory = []; $0.actionHistory = [] }
+                return .reduce {
+                    $0.stateHistory = []
+                    $0.actionHistory = []
+                    $0.skippedActionIds = []
+                    $0.currentActionIndex = nil
+                }
+                .produce { ctx in
+                    Effect.fireAndForget { await ctx.environment.connectionManager.resetSnapshots() }
+                }
 
             case .commit:
                 return .reduce { state in
                     if let ls = state.stateHistory.last, let la = state.actionHistory.last {
                         state.stateHistory  = [ls]
                         state.actionHistory = [la]
+                        state.skippedActionIds = []
+                        state.currentActionIndex = nil
+                    }
+                }
+                .produce { ctx in
+                    Effect.fireAndForget {
+                        await ctx.environment.connectionManager.commitSnapshots()
                     }
                 }
 
@@ -172,31 +149,84 @@ public enum DevToolsBehavior {
                     if state.stateHistory.count > 1 {
                         state.stateHistory.removeLast()
                         state.actionHistory.removeLast()
+                        state.currentActionIndex = nil
                     }
                 }
+
+            case let .importState(lifted):
+                return .reduce { state in
+                    state.stateHistory  = lifted.computedStateJSONs
+                    state.actionHistory = Array(repeating: "{}", count: lifted.computedStateJSONs.count)
+                    state.skippedActionIds  = lifted.skippedActionIds
+                    state.currentActionIndex = lifted.currentStateIndex
+                    state.isPaused = lifted.isPaused
+                    state.isLocked = lifted.isLocked
+                }
+                .produce { ctx in
+                    Effect.fireAndForget {
+                        await ctx.environment.connectionManager.setSkippedActionIds(lifted.skippedActionIds)
+                        await ctx.environment.connectionManager.setPaused(lifted.isPaused)
+                        await ctx.environment.connectionManager.setLocked(lifted.isLocked)
+                    }
+                }
+
+            // MARK: - Recording control
+
+            case .pause:
+                return .reduce { $0.isPaused = true }
+                    .produce { ctx in
+                        Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(true) }
+                    }
+
+            case .resume:
+                return .reduce { $0.isPaused = false }
+                    .produce { ctx in
+                        Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(false) }
+                    }
+
+            case .lockChanges:
+                return .reduce { $0.isLocked = true }
+                    .produce { ctx in
+                        Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(true) }
+                    }
+
+            case .unlockChanges:
+                return .reduce { $0.isLocked = false }
+                    .produce { ctx in
+                        Effect.fireAndForget { await ctx.environment.connectionManager.setLocked(false) }
+                    }
             }
         }
 }
 
-// MARK: - Private consequence helper
+// MARK: - Command → DevToolsAction
 
-private extension Consequence {
-    static func just(_ action: Action) -> Self {
-        .produce { _ in .just(action) }
+private func commandConsequence(_ command: RemoteDevCommand)
+    -> Consequence<DevToolsState, DevToolsEnvironment, DevToolsAction> {
+    switch command {
+    case let .jumpToAction(index):     return .produce { _ in .just(.jumpToAction(index)) }
+    case let .jumpToState(index):      return .produce { _ in .just(.jumpToState(index)) }
+    case let .toggleAction(id):        return .produce { _ in .just(.toggleAction(id)) }
+    case .reset:                       return .produce { _ in .just(.reset) }
+    case .commit:                      return .produce { _ in .just(.commit) }
+    case .rollback:                    return .produce { _ in .just(.rollback) }
+    case let .pauseRecording(paused):  return .produce { _ in .just(paused ? .pause : .resume) }
+    case let .lockChanges(locked):     return .produce { _ in .just(locked ? .lockChanges : .unlockChanges) }
+    case let .importState(json):
+        if let lifted = ImportedLiftedState.from(json: json) {
+            return .produce { _ in .just(.importState(lifted)) }
+        }
+        return .doNothing
+    case .unknown:
+        return .doNothing
     }
 }
 
 // MARK: - Connection stream
 
-/// Returns a `DeferredStream<DevToolsAction>` that, when iterated:
-/// 1. Opens the WebSocket and performs the Socket.io v4 handshake.
-/// 2. Emits `._connected` once the handshake completes.
-/// 3. Continuously emits parsed `DevToolsAction` values from incoming messages.
-/// 4. Emits `._connectionLost` and finishes when the connection closes.
-///
-/// Uses `Task { for await ... }` internally — this is acceptable at the behavior
-/// layer because the Task is started by the Store's Effect runtime (the "shell"),
-/// not eagerly at construction time.
+/// Returns a `DeferredStream<DevToolsAction>` that opens the WebSocket,
+/// performs the Socket.io handshake, yields `._connected`, then drives
+/// the receive loop until the server closes the connection.
 private func connectionStream(
     host: String,
     port: UInt16,
@@ -205,58 +235,47 @@ private func connectionStream(
     DeferredStream {
         AsyncStream { continuation in
             let task = Task {
-                // Step 1: open the WebSocket connection
-                let connResult = await env.openConnection(host, port).run()
+                let result = await env.openConnection(host, port).run()
                 guard !Task.isCancelled else { return }
 
-                switch connResult {
+                switch result {
                 case let .failure(error):
                     continuation.yield(._connectionFailed(error))
                     continuation.finish()
-                    return
 
                 case let .success(connection):
-                    // Store in manager so DevToolsRecorder can send messages
                     await env.connectionManager.setConnection(connection)
                     continuation.yield(._connected(host: host, port: port))
 
-                    // Step 2: iterate the receive stream
                     for await messageResult in connection.receive {
                         guard !Task.isCancelled else { break }
                         switch messageResult {
                         case let .success(.text(text)):
-                            // Handle Socket.io pings inline; surface devtools commands
                             if let action = parseIncoming(text: text, connection: connection) {
                                 continuation.yield(action)
                             }
                         case .success(.data):
-                            break  // binary frames are not used by remotedev-server
+                            break
                         case let .failure(error):
                             continuation.yield(._connectionLost(error))
                             continuation.finish()
                             return
                         }
                     }
-                    // Receive stream finished normally (server closed connection)
                     continuation.yield(._connectionLost(nil))
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { @Sendable _ in
-                task.cancel()
-            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
         }
     }
 }
 
 // MARK: - Incoming message parser
 
-/// Parses an incoming Socket.io text frame and returns an action if applicable.
-/// Responds to PING frames inline (sends PONG), returns `nil` for non-action packets.
 private func parseIncoming(text: String, connection: WebSocketConnection) -> DevToolsAction? {
     switch SocketIO.parse(text) {
     case .ping:
-        // Engine.io requires a synchronous-ish PONG; fire-and-forget is fine
         Task { _ = await connection.send(.text(SocketIO.pong)).run() }
         return nil
     case let .event(name, payload) where name == "dispatch":

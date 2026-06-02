@@ -37,11 +37,10 @@ enum RemoteDevOutbound {
         }
     }
 
-    /// Embeds `json` as a JSON string value — if it parses as a JSON fragment already,
-    /// it is embedded as-is; otherwise it is double-encoded as a quoted string.
+    /// Embeds `json` as a JSON value — if it already parses, it is embedded as-is;
+    /// otherwise it is double-encoded as a quoted string.
     private func encodeStringForJSON(_ json: String) -> String {
         if let data = json.data(using: .utf8),
-           JSONSerialization.isValidJSONObject(json) ||
            (try? JSONSerialization.jsonObject(with: data)) != nil {
             return json
         }
@@ -55,18 +54,36 @@ enum RemoteDevOutbound {
 ///
 /// Received as Socket.io `"dispatch"` events.
 public enum RemoteDevCommand: Sendable {
-    /// Time-travel: replay all stored actions up to (and including) this index.
+    // MARK: - Time travel
+
+    /// Time-travel to the state produced by the action at `index`.
     case jumpToAction(Int)
-    /// Toggle (skip/re-enable) a single action in the history.
+    /// Jump directly to the pre-computed state at `index` (some devtools versions
+    /// use this instead of, or in addition to, `JUMP_TO_ACTION`).
+    case jumpToState(Int)
+    /// Toggle (skip/re-enable) the action at `id` and re-evaluate.
     case toggleAction(Int)
-    /// Reset the store to the initial state (clear all history).
+
+    // MARK: - History management
+
+    /// Reset the store to the initial state and clear all history.
     case reset
     /// Commit the current state as the new baseline and clear the history.
     case commit
     /// Roll back to the state before the last committed checkpoint.
     case rollback
-    /// Import a lifted-state snapshot (full history override).
+    /// Import a full `liftedState` snapshot (replaces all history).
     case importState(String)
+
+    // MARK: - Recording control
+
+    /// Pause or resume recording new actions.
+    case pauseRecording(Bool)
+    /// Lock or unlock state changes (prevent the app from dispatching back).
+    case lockChanges(Bool)
+
+    // MARK: - Unknown
+
     /// Any unrecognised or future command type.
     case unknown(String)
 
@@ -81,18 +98,66 @@ public enum RemoteDevCommand: Sendable {
         case "JUMP_TO_ACTION":
             let id = (obj["actionId"] as? Int) ?? (obj["index"] as? Int) ?? 0
             return .jumpToAction(id)
+        case "JUMP_TO_STATE":
+            let index = (obj["index"] as? Int) ?? 0
+            return .jumpToState(index)
         case "TOGGLE_ACTION":
             let id = (obj["id"] as? Int) ?? 0
             return .toggleAction(id)
-        case "RESET":     return .reset
-        case "COMMIT":    return .commit
-        case "ROLLBACK":  return .rollback
+        case "RESET":    return .reset
+        case "COMMIT":   return .commit
+        case "ROLLBACK": return .rollback
         case "IMPORT_STATE":
             let raw = (try? JSONSerialization.data(withJSONObject: obj["nextLiftedState"] ?? "{}"))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
             return .importState(raw)
+        case "PAUSE_RECORDING":
+            return .pauseRecording((obj["status"] as? Bool) ?? true)
+        case "LOCK_CHANGES":
+            return .lockChanges((obj["status"] as? Bool) ?? true)
         default:
-            return .unknown(payloadJSON)
+            return .unknown(type_)
         }
+    }
+}
+
+// MARK: - Imported lifted state
+
+/// Parsed representation of the `nextLiftedState` payload from `IMPORT_STATE`.
+public struct ImportedLiftedState: Sendable {
+    /// JSON-encoded state strings, one per step (index 0 = initial state).
+    public let computedStateJSONs: [String]
+    /// Action IDs that were marked as skipped in the imported history.
+    public let skippedActionIds: Set<Int>
+    /// The step index to restore as the current state.
+    public let currentStateIndex: Int
+    public let isPaused: Bool
+    public let isLocked: Bool
+
+    /// Parses the raw JSON string from an `IMPORT_STATE` command.
+    /// Returns `nil` if the JSON is malformed or missing required fields.
+    static func from(json: String) -> ImportedLiftedState? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        let computedStates = (obj["computedStates"] as? [[String: Any]]) ?? []
+        let stateJSONs: [String] = computedStates.compactMap { entry in
+            guard let stateObj = entry["state"] else { return nil }
+            return (try? JSONSerialization.data(withJSONObject: stateObj))
+                .flatMap { String(data: $0, encoding: .utf8) }
+        }
+
+        let skippedRaw = (obj["skippedActionIds"] as? [Int]) ?? []
+        let currentIndex = (obj["currentStateIndex"] as? Int) ?? max(0, stateJSONs.count - 1)
+
+        return ImportedLiftedState(
+            computedStateJSONs: stateJSONs,
+            skippedActionIds: Set(skippedRaw),
+            currentStateIndex: min(currentIndex, max(0, stateJSONs.count - 1)),
+            isPaused: (obj["isPaused"] as? Bool) ?? false,
+            isLocked: (obj["isLocked"] as? Bool) ?? false
+        )
     }
 }
