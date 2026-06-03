@@ -116,7 +116,7 @@ enum RemoteDevOutbound {
 /// Commands sent FROM the remotedev-server (or devtools panel) TO the iOS app.
 ///
 /// Received as Socket.io `"dispatch"` events.
-public enum RemoteDevCommand: Sendable {
+public enum RemoteDevCommand: Sendable, Codable {
     // MARK: - Time travel
 
     /// Time-travel to the state produced by the action at `index`.
@@ -205,7 +205,7 @@ public enum RemoteDevCommand: Sendable {
 // MARK: - Imported lifted state
 
 /// Parsed representation of the `nextLiftedState` payload from `IMPORT_STATE`.
-public struct ImportedLiftedState: Sendable {
+public struct ImportedLiftedState: Sendable, Codable {
     /// JSON-encoded state strings, one per step (index 0 = initial state).
     public let computedStateJSONs: [String]
     /// Action IDs that were marked as skipped in the imported history.

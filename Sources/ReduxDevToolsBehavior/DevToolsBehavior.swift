@@ -283,11 +283,11 @@ public enum DevToolsBehavior {
                         switch await ctx.environment.resolveService(service).run() {
                         case let .success(resolved):
                             guard let host = resolved.preferredHost, let port = resolved.port else {
-                                return ._connectionFailed(DevToolsError.couldNotResolveService(service))
+                                return ._connectionFailed(CodableError(DevToolsError.couldNotResolveService(service)))
                             }
                             return .connect(host: host, port: port)
                         case let .failure(error):
-                            return ._connectionFailed(error)
+                            return ._connectionFailed(CodableError(error))
                         }
                     }
                 }
@@ -312,7 +312,7 @@ public enum DevToolsBehavior {
                                 case let .success(.found(svc)):   return ._serviceFound(svc)
                                 case let .success(.removed(svc)): return ._serviceRemoved(svc)
                                 case .success(.updated):          return ._serviceRemoved(.init(name: "", type: "", domain: ""))
-                                case let .failure(error):         return ._connectionFailed(error)
+                                case let .failure(error):         return ._connectionFailed(CodableError(error))
                                 }
                             },
                             scheduling: .replacing(id: "devtools-browse")
@@ -599,7 +599,7 @@ private func connectionStream(
 
                 switch result {
                 case let .failure(error):
-                    continuation.yield(._connectionFailed(error))
+                    continuation.yield(._connectionFailed(CodableError(error)))
                     continuation.finish()
 
                 case let .success(connection):
@@ -628,7 +628,7 @@ private func connectionStream(
                             }
                         case .success(.data): break
                         case let .failure(error):
-                            continuation.yield(._connectionLost(error))
+                            continuation.yield(._connectionLost(CodableError(error)))
                             continuation.finish()
                             return
                         }

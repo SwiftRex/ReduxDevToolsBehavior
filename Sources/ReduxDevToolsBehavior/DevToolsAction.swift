@@ -23,7 +23,15 @@ import Foundation
 ///
 /// Cases prefixed with `_` are dispatched by behavior effects and should not
 /// be dispatched by application code directly.
-public enum DevToolsAction: Sendable {
+/// A `Codable`, `Sendable` wrapper for `Error` values in `DevToolsAction`.
+/// `Error` is not itself `Codable`; this preserves the message across encode/decode.
+public struct CodableError: Error, Codable, Sendable, CustomStringConvertible {
+    public let description: String
+    public init(_ error: Error) { description = error.localizedDescription }
+    public init(_ message: String) { description = message }
+}
+
+public enum DevToolsAction: Sendable, Codable {
 
     // MARK: - Startup
 
@@ -79,10 +87,10 @@ public enum DevToolsAction: Sendable {
     case _handshakeAck(socketId: String)
 
     /// The connection attempt failed.
-    case _connectionFailed(Error)
+    case _connectionFailed(CodableError)
 
     /// An established connection was lost.
-    case _connectionLost(Error?)
+    case _connectionLost(CodableError?)
 
     /// A Bonjour service was discovered.
     case _serviceFound(DiscoveredService)

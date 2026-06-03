@@ -12,11 +12,11 @@ import Foundation
 ///     #endif
 /// }
 /// ```
-public struct DevToolsState: Sendable {
+public struct DevToolsState: Sendable, Codable {
 
     // MARK: - Connection
 
-    public enum ConnectionStatus: Sendable, Equatable {
+    public enum ConnectionStatus: Sendable, Equatable, Codable {
         case disconnected
         case connecting
         /// WebSocket open; SocketCluster handshake in progress.

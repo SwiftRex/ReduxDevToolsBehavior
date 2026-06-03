@@ -16,7 +16,7 @@ import Foundation
 ///     }
 /// }
 /// ```
-public struct DiscoveredService: Sendable, Equatable {
+public struct DiscoveredService: Sendable, Equatable, Codable {
     public let name: String
     public let type: String
     public let domain: String

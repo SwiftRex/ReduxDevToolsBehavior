@@ -117,7 +117,7 @@ public enum DiscoveredServiceEvent: Sendable {
 // MARK: - Errors
 
 /// Errors originating from the devtools behavior.
-public enum DevToolsError: Error {
+public enum DevToolsError: Error, Codable {
     /// ``DevToolsAction/connectToService(_:)`` was dispatched but the service
     /// could not be resolved to a host and port.
     case couldNotResolveService(DiscoveredService)
