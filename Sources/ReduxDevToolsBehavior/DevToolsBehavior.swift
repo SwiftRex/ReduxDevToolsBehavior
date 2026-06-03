@@ -54,17 +54,18 @@ public enum DevToolsBehavior {
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
-        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
         restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
         encodeAction: (@Sendable (AppAction) -> String)? = nil,
         encodeState:  (@Sendable (AppState?) -> String)? = nil,
         deserializeState:  (@Sendable (String) -> AppState?)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
-        lift(
+        let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
+        return lift(
             actionPrism, statePath, envPath,
             timeMachine: timeMachineBehavior(
-                extractDevToolsAction: extractDevToolsAction,
+                extractDevToolsAction: extract,
                 restoreStateAction: restoreStateAction,
                 encodeAction: encodeAction,
                 encodeState: encodeState,
@@ -79,15 +80,16 @@ public enum DevToolsBehavior {
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
-        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
         restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
         encodeAction: (@Sendable (AppAction) -> String)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
-        lift(
+        let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
+        return lift(
             actionPrism, statePath, envPath,
             timeMachine: timeMachineBehavior(
-                extractDevToolsAction: extractDevToolsAction,
+                extractDevToolsAction: extract,
                 restoreStateAction: restoreStateAction,
                 encodeAction: encodeAction,
                 deserializeAction: deserializeAction
@@ -111,13 +113,14 @@ public enum DevToolsBehavior {
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
-        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
+        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
         restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
-        lift(
+        let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
+        return lift(
             actionPrism, statePath, envPath,
             timeMachine: timeMachineBehavior(
-                extractDevToolsAction: extractDevToolsAction,
+                extractDevToolsAction: extract,
                 restoreStateAction: restoreStateAction
             )
         )

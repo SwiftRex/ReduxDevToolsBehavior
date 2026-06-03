@@ -29,12 +29,39 @@ enum RemoteDevOutbound {
             {"type":"INIT","payload":\(payload),"instanceId":"\(instanceId)","name":"\(name)"}
             """
         case let .action(action, state, instanceId):
-            let actionPayload = encodeStringForJSON(action)
+            let actionPayload = normalizeAction(action)
             let statePayload  = encodeStringForJSON(state)
             return """
             {"type":"ACTION","action":\(actionPayload),"payload":\(statePayload),"instanceId":"\(instanceId)"}
             """
         }
+    }
+
+    /// Normalises an action JSON string into `{"type":"..."}` shape that Redux DevTools
+    /// expects. MirrorJSON produces strings for no-payload cases (`"increment"`) and
+    /// `{"caseName": payload}` objects for associated-value cases — neither has a `type`
+    /// key, so we synthesise one.
+    private func normalizeAction(_ json: String) -> String {
+        guard let data = json.data(using: .utf8) else { return "\"\(json)\"" }
+
+        // Plain string → {"type":"caseName"}
+        if let str = try? JSONSerialization.jsonObject(with: data) as? String {
+            return "{\"type\":\"\(str)\"}"
+        }
+
+        // Object without `type` → add `type` from first key
+        if var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           obj["type"] == nil,
+           let firstKey = obj.keys.sorted().first {
+            obj["type"] = firstKey
+            if let normalized = try? JSONSerialization.data(withJSONObject: obj),
+               let str = String(data: normalized, encoding: .utf8) {
+                return str
+            }
+        }
+
+        // Already has `type` or fallback — embed as-is
+        return encodeStringForJSON(json)
     }
 
     /// Embeds `json` as a JSON value — if it already parses, it is embedded as-is;
