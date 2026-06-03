@@ -501,6 +501,25 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
     Behavior { action, _ in
 
         if let dtAction = extractDevToolsAction(action) {
+            // On connect: send INIT immediately so the devtools panel shows the
+            // current state without waiting for the first app action.
+            if case ._handshakeAck = dtAction {
+                return .produce { ctx in
+                    Effect.task {
+                        let mgr = ctx.environment.connectionManager
+                        guard await mgr.isConnected else { return nil }
+                        let stateJSON    = encodeState(await ctx.stateAfter)
+                        let instanceId   = ctx.environment.instanceId
+                        let instanceName = ctx.environment.instanceName ?? instanceId
+                        _ = await mgr.checkAndMarkInitSent()
+                        _ = await mgr.send(SocketCluster.transmit(
+                            event: "log-noid",
+                            jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
+                        ))
+                        return nil
+                    }
+                }
+            }
             return handleDevToolsCommand(
                 dtAction,
                 restoreStateAction: restoreStateAction,

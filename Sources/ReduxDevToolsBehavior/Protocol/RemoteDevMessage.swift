@@ -68,18 +68,22 @@ enum RemoteDevOutbound {
     /// Recursively flattens a chain of single-key dictionaries into a `/`-separated
     /// type path, returning the leaf value as the payload.
     /// `{"a":{"b":{"c":42}}}` → `("a/b/c", 42)`
-    private func flattenPath(_ obj: [String: Any]) -> (String, Any?) {
+    /// - Parameter isNested: `true` when called recursively. At the top level a
+    ///   single String value is a no-payload sub-case name and belongs in the path
+    ///   (`{"navigation":"push"}` → `navigation/push`). Inside a nested object the
+    ///   same String is already the payload of its parent case and must not be
+    ///   appended (`{"navigation":{"push":"reportInput"}}` → `navigation/push`,
+    ///   payload `"reportInput"`, NOT `navigation/push/reportInput`).
+    private func flattenPath(_ obj: [String: Any], isNested: Bool = false) -> (String, Any?) {
         guard obj.count == 1, let key = obj.keys.first else {
             return (obj.keys.sorted().joined(separator: "/"), obj)
         }
         let value = obj[key]
-        // No-payload nested enum case — string value is the sub-case name, not a payload
-        if let str = value as? String {
+        if let str = value as? String, !isNested {
             return ("\(key)/\(str)", nil)
         }
-        // Single-key dict → recurse
         if let nested = value as? [String: Any], nested.count == 1 {
-            let (subPath, payload) = flattenPath(nested)
+            let (subPath, payload) = flattenPath(nested, isNested: true)
             return ("\(key)/\(subPath)", payload)
         }
         return (key, value)
