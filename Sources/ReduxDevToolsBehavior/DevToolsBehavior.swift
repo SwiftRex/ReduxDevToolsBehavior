@@ -266,14 +266,10 @@ public enum DevToolsBehavior {
                         return .empty
                     case let .connectOnLaunch(host, port):
                         return .just(.connect(host: host, port: port))
-                    case .browseOnLaunch:
-                        // The serviceType from the mode is stored in the environment and
-                        // will be used by .startBrowsing → env.browseServices(serviceType).
-                        // Phase 3 note: pass the custom serviceType through here.
+                    case .browseOnLaunch, .autoConnect:
+                        // Both modes start browsing. .autoConnect also auto-connects
+                        // on the first ._serviceFound (handled in that case below).
                         return .just(.startBrowsing)
-                    case .advertiseAcceptAll, .advertise:
-                        // Phase 3 — not yet implemented; native Swift devtools required
-                        return .empty
                     }
                 }
 
@@ -339,6 +335,12 @@ public enum DevToolsBehavior {
 
             case let ._connected(host, port):
                 return .reduce { $0.connectionStatus = .connected(host: host, port: port) }
+                    .produce { ctx in
+                        // In .autoConnect mode, stop browsing once connected —
+                        // no point continuing to scan the network.
+                        guard case .autoConnect = ctx.environment.connectionMode else { return .empty }
+                        return .just(.stopBrowsing)
+                    }
 
             case ._connectionFailed:
                 return .reduce { $0.connectionStatus = .disconnected }
@@ -354,6 +356,16 @@ public enum DevToolsBehavior {
                 return .reduce { state in
                     if !state.discoveredServices.contains(svc) {
                         state.discoveredServices.append(svc)
+                    }
+                }
+                .produce { ctx in
+                    // In .autoConnect mode, connect to the first server found
+                    // (but only if still disconnected — ignore subsequent discoveries).
+                    guard case .autoConnect = ctx.environment.connectionMode else { return .empty }
+                    return Effect.task {
+                        let status = await ctx.stateAfter?.connectionStatus
+                        guard case .disconnected = status else { return nil }
+                        return .connectToService(svc)
                     }
                 }
 

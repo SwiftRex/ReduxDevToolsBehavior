@@ -18,57 +18,16 @@ in history.
 
 ## Connection topology
 
-### Phase 1 — phone connects to remotedev-server (current)
-
 ```
 Phone ──WebSocket──▶ remotedev-server ◀──── Redux DevTools panel
                       (relay, port 8000)        (Electron / browser)
 ```
 
-The phone is the **client**. Both the phone and the devtools panel connect to a relay
-server (`remotedev-server`). The server must be running on the Mac before the phone
-connects.
+The phone is the **WebSocket client**. It connects to a running `remotedev-server` relay
+on the Mac. Both the phone and the Redux DevTools panel connect to the same relay;
+messages pass through it in both directions.
 
-The existing unmodified Electron Redux DevTools app **cannot** initiate a connection to
-the phone — it has no Bonjour browser and only speaks to its own backend relay.
-
-### Phase 3 — phone is the server (roadmap)
-
-The connection direction reverses: the phone runs a WebSocket server; the devtools
-connects to it. Three stepping stones, each building on the last:
-
-**3a — existing Electron devtools, manual IP** *(fastest to implement)*
-
-```
-Electron devtools ──Socket.io──▶ iOS app (WebSocket server, manual IP)
-```
-
-The phone implements the relay protocol from the server side. The developer configures
-the Electron devtools to connect to the phone's IP:port instead of localhost. No changes
-to the Electron app; no Bonjour auto-discovery.
-
-**3b — modified remotedev-server + Bonjour**
-
-```
-Electron devtools ──Socket.io──▶ remotedev-server (with Bonjour browse) ──▶ iOS app server
-```
-
-A small PR to the open-source `remotedev-server` (Node.js) adds Bonjour browsing
-(`npm install bonjour`) to auto-discover advertising phones and route traffic to them.
-
-**3c — native Swift devtools** *(ideal UX)*
-
-```
-Phone ◀──WebSocket──── native Swift devtools app
-(NWListener + Bonjour)   (NWBrowser, connects automatically)
-```
-
-The devtools browses Bonjour, finds every advertising phone on the network, and connects
-automatically. Open the devtools — all running debug builds appear. No configuration.
-
-**None of Phase 3 is implemented yet.** `ConnectionMode.advertiseAcceptAll` and
-`ConnectionMode.advertise` are pre-wired in the API so the behavior already has the
-right shape when server-side support is added.
+The devtools panel never initiates the connection — the phone always connects outward.
 
 ---
 
@@ -87,60 +46,59 @@ var devTools: DevToolsEnvironment = .live(connectionMode: .browseOnLaunch)
 store.dispatch(.devTools(.activate))
 ```
 
-| Mode | Phase | Topology | Notes |
-|---|---|---|---|
-| `.manual` | 1 | App → server | Dispatch `.connect` or `.startBrowsing` explicitly |
-| `.connectOnLaunch(host:port:)` | 1 | App → server | Fixed IP; good for CI / lab networks |
-| `.browseOnLaunch(serviceType:)` | 1 | App → server | Auto-browse; user picks from list |
-| `.advertiseAcceptAll(serviceType:serviceName:)` | 3 🔜 | Server → app | Best UX; requires native devtools |
-| `.advertise(serviceType:serviceName:accept:)` | 3 🔜 | Server → app | Controlled pairing |
+| Mode | Notes |
+|---|---|
+| `.manual` | Dispatch `.connect` or `.startBrowsing` explicitly from a debug settings screen |
+| `.autoConnect` | **Recommended.** Browses Bonjour, connects to the first server found automatically |
+| `.connectOnLaunch(host:port:)` | Fixed IP; good for CI or stable lab networks |
+| `.browseOnLaunch` | Browses Bonjour; `DevToolsState.discoveredServices` fills; user picks |
 
-### Mode 1 — `.manual`
-
-User dispatches actions from a debug settings screen or shake gesture:
+### `.autoConnect` — recommended
 
 ```swift
-// Connect to a known server
-store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
+devTools: .live(connectionMode: .autoConnect)
 
-// Or browse and pick
-store.dispatch(.devTools(.startBrowsing))
-// → DevToolsState.discoveredServices fills
-// → User taps a row:
-store.dispatch(.devTools(.connectToService(selectedService)))
-// → Automatically resolves host:port and connects
+// At app launch:
+store.dispatch(.devTools(.activate))
+// → starts browsing "_reduxdevtools._tcp."
+// → connects to the first remotedev-server found
+// → stops browsing once connected
 ```
 
-### Mode 2 — `.connectOnLaunch`
+No further action needed. As long as `remotedev-server` is running on the same network,
+the connection happens automatically on every app launch.
+
+### `.connectOnLaunch` — fixed IP
 
 ```swift
 devTools: .live(connectionMode: .connectOnLaunch(host: "192.168.1.100", port: 8000))
 
-// At app start:
 store.dispatch(.devTools(.activate))  // immediately connects
 ```
 
-### Mode 3 — `.browseOnLaunch`
+### `.browseOnLaunch` — user picks
 
 ```swift
-devTools: .live(connectionMode: .browseOnLaunch)  // uses "_reduxdevtools._tcp."
+devTools: .live(connectionMode: .browseOnLaunch)
 
-// At app start:
-store.dispatch(.devTools(.activate))  // immediately starts browsing
+store.dispatch(.devTools(.activate))  // starts browsing
 
 // Present DevToolsState.discoveredServices in your debug UI.
-// When user picks:
+// When user selects one:
 store.dispatch(.devTools(.connectToService(selectedService)))
+// → resolves host:port automatically and connects
 ```
 
-### Modes 4 & 5 — `.advertise*` (Phase 3)
+### `.manual` — explicit control
 
 ```swift
-// Pre-wire the mode now; connection will work once native devtools ships
-devTools: .live(connectionMode: .advertiseAcceptAll)
+devTools: .live()  // connectionMode defaults to .manual
 
-// At app start:
-store.dispatch(.devTools(.activate))  // no-op until Phase 3 is implemented
+// From a shake gesture, debug settings screen, etc.:
+store.dispatch(.devTools(.connect(host: "192.168.1.100", port: 8000)))
+// or
+store.dispatch(.devTools(.startBrowsing))
+store.dispatch(.devTools(.connectToService(selectedService)))
 ```
 
 ---
@@ -585,7 +543,4 @@ Engine.io ping/pong (`2` / `3`) is handled transparently.
 - [x] Phase 2 — automatic `JSONEncoder`/`JSONDecoder` for `AppState: Codable`
 - [x] Phase 2 — dispatch actions from devtools Dispatcher tab (`AppAction: Decodable`)
 - [x] Phase 2 — bounded ring buffer (memory-efficient on iOS)
-- [ ] Phase 3a — phone as server, existing Electron devtools with manual IP (no relay needed)
-- [ ] Phase 3b — modified remotedev-server with Bonjour auto-discovery (Node.js PR)
-- [ ] Phase 3c — native Swift devtools app (full Bonjour, zero config)
-- [ ] Phase 3 — Linux support via NIO WebSocket backend
+- [ ] Linux support via NIO WebSocket backend

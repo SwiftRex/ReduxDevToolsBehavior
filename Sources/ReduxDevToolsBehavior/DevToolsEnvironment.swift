@@ -78,10 +78,9 @@ public struct DevToolsEnvironment: Sendable {
     /// falls back to `"_reduxdevtools._tcp."`.
     public var browsingServiceType: String {
         switch connectionMode {
-        case let .browseOnLaunch(type):     return type
-        case let .advertiseAcceptAll(type, _): return type
-        case let .advertise(type, _, _):    return type
-        default:                            return "_reduxdevtools._tcp."
+        case let .browseOnLaunch(type): return type
+        case let .autoConnect(type):    return type
+        default:                        return "_reduxdevtools._tcp."
         }
     }
 
