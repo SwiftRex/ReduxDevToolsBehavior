@@ -507,12 +507,14 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 let instanceId   = ctx.environment.instanceId
                 let instanceName = ctx.environment.instanceName ?? instanceId
                 if await mgr.checkAndMarkInitSent() {
-                    _ = await mgr.send(SocketIO.emit("log",
-                        RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
+                    _ = await mgr.send(SocketCluster.publish(
+                        channel: "log-noid",
+                        jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
                     ))
                 }
-                _ = await mgr.send(SocketIO.emit("log",
-                    RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
+                _ = await mgr.send(SocketCluster.publish(
+                    channel: "log-noid",
+                    jsonPayload: RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
                 ))
                 return nil
             }
@@ -612,12 +614,30 @@ private func connectionStream(
 }
 
 private func parseIncoming(text: String, connection: WebSocketConnection) -> DevToolsAction? {
-    switch SocketIO.parse(text) {
+    switch SocketCluster.parse(text) {
     case .ping:
-        Task { _ = await connection.send(.text(SocketIO.pong)).run() }
+        Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
         return nil
-    case let .event(name, payload) where name == "dispatch":
-        return ._received(RemoteDevCommand.from(payloadJSON: payload))
+    case let .publish(channel, payload) where channel.hasPrefix("sc-"):
+        return parseDispatch(payload)
+    default:
+        return nil
+    }
+}
+
+private func parseDispatch(_ payload: String) -> DevToolsAction? {
+    guard let data = payload.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let type_ = obj["type"] as? String
+    else { return nil }
+
+    switch type_ {
+    case "DISPATCH":
+        guard let action = obj["action"],
+              let actionData = try? JSONSerialization.data(withJSONObject: action),
+              let actionJSON = String(data: actionData, encoding: .utf8)
+        else { return nil }
+        return ._received(RemoteDevCommand.from(payloadJSON: actionJSON))
     default:
         return nil
     }

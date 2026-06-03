@@ -63,7 +63,7 @@ extension DevToolsEnvironment {
             connectionManager: manager,
 
             openConnection: { host, port in
-                guard let url = URL(string: "ws://\(host):\(port)") else {
+                guard let url = URL(string: "ws://\(host):\(port)/socketcluster/") else {
                     return DeferredTask<Result<WebSocketConnection, Error>> {
                         .failure(DevToolsConnectionError.invalidURL(host: host, port: port))
                     }
@@ -71,7 +71,7 @@ extension DevToolsEnvironment {
                 return urlSession
                     .webSocketConnection(with: url)
                     .flatMap { connection in
-                        DeferredTask { await performSocketIOHandshake(connection: connection) }
+                        DeferredTask { await performSocketClusterHandshake(connection: connection) }
                     }
             },
 
@@ -94,26 +94,21 @@ extension DevToolsEnvironment {
     }
 }
 
-// MARK: - Socket.io handshake (file-level private functions)
+// MARK: - SocketCluster handshake (file-level private functions)
 
-private func performSocketIOHandshake(
+private func performSocketClusterHandshake(
     connection: WebSocketConnection
 ) async -> Result<WebSocketConnection, Error> {
-    guard case .success(.text(let openFrame)) = await connection.receive.first() else {
-        return .failure(DevToolsConnectionError.handshakeFailed("no OPEN packet"))
-    }
-    guard case .open = SocketIO.parse(openFrame) else {
-        return .failure(DevToolsConnectionError.handshakeFailed("expected OPEN, got: \(openFrame)"))
-    }
-
-    _ = await connection.send(.text(SocketIO.connect)).run()
+    _ = await connection.send(.text(SocketCluster.handshake(cid: 1))).run()
 
     guard case .success(.text(let ackFrame)) = await connection.receive.first() else {
-        return .failure(DevToolsConnectionError.handshakeFailed("no CONNECT ACK"))
+        return .failure(DevToolsConnectionError.handshakeFailed("no handshake ack"))
     }
-    guard case .connected = SocketIO.parse(ackFrame) else {
-        return .failure(DevToolsConnectionError.handshakeFailed("expected CONNECT ACK, got: \(ackFrame)"))
+    guard case .handshakeAck(let socketId, _) = SocketCluster.parse(ackFrame) else {
+        return .failure(DevToolsConnectionError.handshakeFailed("expected handshakeAck, got: \(ackFrame)"))
     }
+
+    _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
 
     return .success(connection)
 }
