@@ -83,9 +83,9 @@ enum RemoteDevOutbound {
     /// Always returns `json` as a JSON string literal (double-encoded).
     /// Required for `payload` so Redux DevTools JSON.parses each snapshot
     /// independently and can compute state diffs between them.
+    /// Note: does NOT use JSONSerialization — passing a String to
+    /// dataWithJSONObject raises an NSException that try? cannot catch.
     private func jsonStringLiteral(_ json: String) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: json),
-           let s = String(data: data, encoding: .utf8) { return s }
         let escaped = json
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
