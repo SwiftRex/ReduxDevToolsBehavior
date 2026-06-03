@@ -24,13 +24,15 @@ enum RemoteDevOutbound {
     func toJSON() -> String {
         switch self {
         case let .`init`(state, instanceId, name):
-            let payload = encodeStringForJSON(state)
+            // payload must be a JSON string (not an object) so the devtools can
+            // JSON.parse each snapshot independently and compute state diffs.
+            let payload = jsonStringLiteral(state)
             return """
             {"type":"INIT","payload":\(payload),"instanceId":"\(instanceId)","name":"\(name)"}
             """
         case let .action(action, state, instanceId):
             let actionPayload = normalizeAction(action)
-            let statePayload  = encodeStringForJSON(state)
+            let statePayload  = jsonStringLiteral(state)
             return """
             {"type":"ACTION","action":\(actionPayload),"payload":\(statePayload),"instanceId":"\(instanceId)"}
             """
@@ -38,40 +40,69 @@ enum RemoteDevOutbound {
     }
 
     /// Normalises an action JSON string into `{"type":"..."}` shape that Redux DevTools
-    /// expects. MirrorJSON produces strings for no-payload cases (`"increment"`) and
-    /// `{"caseName": payload}` objects for associated-value cases — neither has a `type`
-    /// key, so we synthesise one.
+    /// expects. MirrorJSON produces `"caseName"` for no-payload cases and
+    /// `{"caseName": payload}` for associated-value cases — neither has a `type` key.
+    /// Nested single-key objects are flattened into a slash-separated path, e.g.
+    /// `{"calendar":{"selectDay":{...}}}` → `{"type":"calendar/selectDay","payload":{...}}`.
     private func normalizeAction(_ json: String) -> String {
-        guard let data = json.data(using: .utf8) else { return "\"\(json)\"" }
+        guard let data = json.data(using: .utf8) else { return "{\"type\":\"\(json)\"}" }
 
-        // Plain string → {"type":"caseName"}
+        // Plain string (no-payload enum case) → {"type":"caseName"}
         if let str = try? JSONSerialization.jsonObject(with: data) as? String {
             return "{\"type\":\"\(str)\"}"
         }
 
-        // Object without `type` → add `type` from first key
-        if var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           obj["type"] == nil,
-           let firstKey = obj.keys.sorted().first {
-            obj["type"] = firstKey
-            if let normalized = try? JSONSerialization.data(withJSONObject: obj),
-               let str = String(data: normalized, encoding: .utf8) {
-                return str
-            }
+        // Single-key object → flatten path, keep leaf as payload
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           obj["type"] == nil {
+            let (path, payload) = flattenPath(obj)
+            var result: [String: Any] = ["type": path]
+            if let p = payload { result["payload"] = p }
+            if let d = try? JSONSerialization.data(withJSONObject: result),
+               let s = String(data: d, encoding: .utf8) { return s }
         }
 
-        // Already has `type` or fallback — embed as-is
         return encodeStringForJSON(json)
     }
 
-    /// Embeds `json` as a JSON value — if it already parses, it is embedded as-is;
-    /// otherwise it is double-encoded as a quoted string.
+    /// Recursively flattens a chain of single-key dictionaries into a `/`-separated
+    /// type path, returning the leaf value as the payload.
+    /// `{"a":{"b":{"c":42}}}` → `("a/b/c", 42)`
+    private func flattenPath(_ obj: [String: Any]) -> (String, Any?) {
+        guard obj.count == 1, let key = obj.keys.first else {
+            return (obj.keys.sorted().joined(separator: "/"), obj)
+        }
+        let value = obj[key]
+        if let nested = value as? [String: Any], nested.count == 1 {
+            let (subPath, payload) = flattenPath(nested)
+            return ("\(key)/\(subPath)", payload)
+        }
+        return (key, value)
+    }
+
+    /// Always returns `json` as a JSON string literal (double-encoded).
+    /// Required for `payload` so Redux DevTools JSON.parses each snapshot
+    /// independently and can compute state diffs between them.
+    private func jsonStringLiteral(_ json: String) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: json),
+           let s = String(data: data, encoding: .utf8) { return s }
+        let escaped = json
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+        return "\"\(escaped)\""
+    }
+
+    /// Embeds `json` as a JSON value — if it already parses, embed as-is;
+    /// otherwise double-encode as a quoted string.
     private func encodeStringForJSON(_ json: String) -> String {
         if let data = json.data(using: .utf8),
            (try? JSONSerialization.jsonObject(with: data)) != nil {
             return json
         }
-        return "\"\(json.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
+        return jsonStringLiteral(json)
     }
 }
 
