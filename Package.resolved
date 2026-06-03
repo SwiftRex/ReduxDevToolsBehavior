@@ -1,5 +1,5 @@
 {
-  "originHash" : "50b90bc8dc6b7ed87d7b0a9a5bb0e9fac4f7f007be8d5f53a39850cfa8c265ca",
+  "originHash" : "209d3c9f4aee2bfb0aec727f7376737a878eb157d5662713df3a57a2e94e6b06",
   "pins" : [
     {
       "identity" : "fp",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "dda7d6cb9bc20a23f0c89e5447df258e5cd17e28",
         "version" : "1.8.1"
+      }
+    },
+    {
+      "identity" : "networktools",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/luizmb/NetworkTools.git",
+      "state" : {
+        "branch" : "feature/websocket-bonjour-targets",
+        "revision" : "1a7bd2aaefeda95e6dc2c17582688f7298965604"
       }
     },
     {
@@ -71,6 +80,15 @@
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"
+      }
+    },
+    {
+      "identity" : "swiftrex",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SwiftRex/SwiftRex.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "c0f3219806fee2a1f72303d5c38b91dc72a36d8c"
       }
     }
   ],

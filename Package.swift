@@ -13,8 +13,8 @@ let package = Package(
         .library(name: "ReduxDevToolsBehavior", targets: ["ReduxDevToolsBehavior"]),
     ],
     dependencies: [
-        .package(path: "../SwiftRex"),
-        .package(path: "../../NetworkTools"),
+        .package(url: "https://github.com/SwiftRex/SwiftRex.git", branch: "main"),
+        .package(url: "https://github.com/luizmb/NetworkTools.git", branch: "feature/websocket-bonjour-targets"),
         .package(url: "https://github.com/luizmb/FP.git", from: "1.8.1"),
     ],
     targets: [
