@@ -73,6 +73,11 @@ enum RemoteDevOutbound {
             return (obj.keys.sorted().joined(separator: "/"), obj)
         }
         let value = obj[key]
+        // No-payload nested enum case — string value is the sub-case name, not a payload
+        if let str = value as? String {
+            return ("\(key)/\(str)", nil)
+        }
+        // Single-key dict → recurse
         if let nested = value as? [String: Any], nested.count == 1 {
             let (subPath, payload) = flattenPath(nested)
             return ("\(key)/\(subPath)", payload)
