@@ -50,8 +50,11 @@ enum SocketCluster {
         "{\"event\":\"#subscribe\",\"data\":{\"channel\":\"\(channel)\"},\"cid\":\(cid)}"
     }
 
-    static func publish(channel: String, jsonPayload: String) -> String {
-        "{\"event\":\"#publish\",\"data\":{\"channel\":\"\(channel)\",\"data\":\(jsonPayload)}}"
+    /// Transmit an event to the server — used to send app actions to the relay.
+    /// The server's inbound middleware re-publishes transmits to `log-noid` on the `log` channel.
+    /// Note: `#publish` (client-side publish) is disabled on the server (`allowClientPublish: false`).
+    static func transmit(event: String, jsonPayload: String) -> String {
+        "{\"event\":\"\(event)\",\"data\":\(jsonPayload)}"
     }
 
     // MARK: - Inbound

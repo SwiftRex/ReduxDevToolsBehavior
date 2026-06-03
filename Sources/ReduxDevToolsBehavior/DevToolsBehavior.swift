@@ -520,13 +520,13 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 let instanceId   = ctx.environment.instanceId
                 let instanceName = ctx.environment.instanceName ?? instanceId
                 if await mgr.checkAndMarkInitSent() {
-                    _ = await mgr.send(SocketCluster.publish(
-                        channel: "log-noid",
+                    _ = await mgr.send(SocketCluster.transmit(
+                        event: "log-noid",
                         jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
                     ))
                 }
-                _ = await mgr.send(SocketCluster.publish(
-                    channel: "log-noid",
+                _ = await mgr.send(SocketCluster.transmit(
+                    event: "log-noid",
                     jsonPayload: RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
                 ))
                 return nil
