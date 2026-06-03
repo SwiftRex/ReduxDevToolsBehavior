@@ -19,6 +19,9 @@ public struct DevToolsState: Sendable {
     public enum ConnectionStatus: Sendable, Equatable {
         case disconnected
         case connecting
+        /// WebSocket open; SocketCluster handshake in progress.
+        case handshaking(host: String, port: UInt16)
+        /// SocketCluster handshake complete; ready to send and receive.
         case connected(host: String, port: UInt16)
     }
 
@@ -30,6 +33,10 @@ public struct DevToolsState: Sendable {
     public var discoveredServices: [DiscoveredService]
 
     public var isBrowsing: Bool
+
+    /// The SocketCluster socket ID assigned by the server after a successful handshake.
+    /// `nil` while disconnected or still handshaking.
+    public var socketId: String?
 
     // MARK: - Recording
 
@@ -68,6 +75,7 @@ public struct DevToolsState: Sendable {
         connectionStatus: .disconnected,
         discoveredServices: [],
         isBrowsing: false,
+        socketId: nil,
         stateHistory: [],
         actionHistory: [],
         skippedActionIds: [],
@@ -80,6 +88,7 @@ public struct DevToolsState: Sendable {
         connectionStatus: ConnectionStatus,
         discoveredServices: [DiscoveredService],
         isBrowsing: Bool,
+        socketId: String? = nil,
         stateHistory: [String],
         actionHistory: [String],
         skippedActionIds: Set<Int>,
@@ -90,6 +99,7 @@ public struct DevToolsState: Sendable {
         self.connectionStatus = connectionStatus
         self.discoveredServices = discoveredServices
         self.isBrowsing = isBrowsing
+        self.socketId = socketId
         self.stateHistory = stateHistory
         self.actionHistory = actionHistory
         self.skippedActionIds = skippedActionIds

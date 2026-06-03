@@ -68,11 +68,7 @@ extension DevToolsEnvironment {
                         .failure(DevToolsConnectionError.invalidURL(host: host, port: port))
                     }
                 }
-                return urlSession
-                    .webSocketConnection(with: url)
-                    .flatMap { connection in
-                        DeferredTask { await performSocketClusterHandshake(connection: connection) }
-                    }
+                return urlSession.webSocketConnection(with: url).map(Result<WebSocketConnection, Error>.success)
             },
 
             browseServices: { serviceType in
@@ -94,24 +90,6 @@ extension DevToolsEnvironment {
     }
 }
 
-// MARK: - SocketCluster handshake (file-level private functions)
-
-private func performSocketClusterHandshake(
-    connection: WebSocketConnection
-) async -> Result<WebSocketConnection, Error> {
-    _ = await connection.send(.text(SocketCluster.handshake(cid: 1))).run()
-
-    guard case .success(.text(let ackFrame)) = await connection.receive.first() else {
-        return .failure(DevToolsConnectionError.handshakeFailed("no handshake ack"))
-    }
-    guard case .handshakeAck(let socketId, _) = SocketCluster.parse(ackFrame) else {
-        return .failure(DevToolsConnectionError.handshakeFailed("expected handshakeAck, got: \(ackFrame)"))
-    }
-
-    _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
-
-    return .success(connection)
-}
 
 // MARK: - Helpers
 

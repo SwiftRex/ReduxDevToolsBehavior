@@ -323,6 +323,7 @@ public enum DevToolsBehavior {
             case .disconnect:
                 return .reduce {
                     $0.connectionStatus = .disconnected
+                    $0.socketId = nil
                     $0.isPaused = false
                     $0.isLocked = false
                 }
@@ -334,7 +335,7 @@ public enum DevToolsBehavior {
                 }
 
             case let ._connected(host, port):
-                return .reduce { $0.connectionStatus = .connected(host: host, port: port) }
+                return .reduce { $0.connectionStatus = .handshaking(host: host, port: port) }
                     .produce { ctx in
                         // In .autoConnect mode, stop browsing once connected —
                         // no point continuing to scan the network.
@@ -342,12 +343,24 @@ public enum DevToolsBehavior {
                         return .just(.stopBrowsing)
                     }
 
+            case let ._handshakeAck(socketId):
+                return .reduce { state in
+                    if case .handshaking(let host, let port) = state.connectionStatus {
+                        state.connectionStatus = .connected(host: host, port: port)
+                    }
+                    state.socketId = socketId
+                }
+
             case ._connectionFailed:
-                return .reduce { $0.connectionStatus = .disconnected }
+                return .reduce {
+                    $0.connectionStatus = .disconnected
+                    $0.socketId = nil
+                }
 
             case ._connectionLost:
                 return .reduce {
                     $0.connectionStatus = .disconnected
+                    $0.socketId = nil
                     $0.isPaused = false
                     $0.isLocked = false
                 }
@@ -587,15 +600,28 @@ private func connectionStream(
                     continuation.finish()
 
                 case let .success(connection):
-                    await env.connectionManager.setConnection(connection)
-                    continuation.yield(._connected(host: host, port: port))
+                    // Send SocketCluster handshake directly — the manager has no connection
+                    // yet, so the recorder cannot fire prematurely.
+                    _ = await connection.send(.text(SocketCluster.handshake(cid: 1))).run()
 
+                    // Single iterator for the entire connection lifetime — creating a second
+                    // iterator would cancel the underlying URLSessionWebSocketTask.
                     for await messageResult in connection.receive {
                         guard !Task.isCancelled else { break }
                         switch messageResult {
                         case let .success(.text(text)):
-                            if let action = parseIncoming(text: text, connection: connection) {
-                                continuation.yield(action)
+                            switch SocketCluster.parse(text) {
+                            case .ping:
+                                Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
+                            case .handshakeAck(let socketId, _):
+                                _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
+                                await env.connectionManager.setConnection(connection)
+                                continuation.yield(._connected(host: host, port: port))
+                                continuation.yield(._handshakeAck(socketId: socketId))
+                            case let .publish(channel, payload) where channel.hasPrefix("sc-"):
+                                if let action = parseDispatch(payload) { continuation.yield(action) }
+                            default:
+                                break
                             }
                         case .success(.data): break
                         case let .failure(error):
@@ -610,18 +636,6 @@ private func connectionStream(
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
         }
-    }
-}
-
-private func parseIncoming(text: String, connection: WebSocketConnection) -> DevToolsAction? {
-    switch SocketCluster.parse(text) {
-    case .ping:
-        Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
-        return nil
-    case let .publish(channel, payload) where channel.hasPrefix("sc-"):
-        return parseDispatch(payload)
-    default:
-        return nil
     }
 }
 

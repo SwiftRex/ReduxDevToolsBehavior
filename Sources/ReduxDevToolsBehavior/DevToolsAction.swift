@@ -71,8 +71,12 @@ public enum DevToolsAction: Sendable {
 
     // MARK: - Internal events (dispatched by behavior effects)
 
-    /// The WebSocket + Socket.io handshake completed successfully.
+    /// The WebSocket connection was established; SocketCluster handshake is in progress.
     case _connected(host: String, port: UInt16)
+
+    /// The SocketCluster handshake completed — the server assigned `socketId` and
+    /// the client subscribed to its personal channel. The connection is now fully ready.
+    case _handshakeAck(socketId: String)
 
     /// The connection attempt failed.
     case _connectionFailed(Error)
