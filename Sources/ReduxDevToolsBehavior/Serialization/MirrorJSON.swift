@@ -41,6 +41,43 @@ public enum MirrorJSON {
         return string
     }
 
+    // MARK: - Action description for Redux DevTools
+
+    /// Produces a Redux-DevTools-friendly action description by walking the enum
+    /// hierarchy using runtime type names. Types whose name contains `"Action"` are
+    /// treated as part of the action path; the first non-Action associated value
+    /// becomes the payload.
+    ///
+    /// Example: `AppAction.navigation(.push(.reportInput))`
+    /// → type `".navigation(.push)"`, payload `"reportInput"`
+    static func actionDescription(_ value: Any) -> (type: String, payloadJSON: String) {
+        let (path, payload) = buildActionPath(value)
+        let typeName = formatActionPath(path, index: 0)
+        let payloadJSON = payload.map { encode($0) } ?? "{}"
+        return (typeName, payloadJSON)
+    }
+
+    private static func buildActionPath(_ value: Any) -> ([String], Any?) {
+        let mirror = Mirror(reflecting: value)
+        guard mirror.displayStyle == .enum else { return ([], value) }
+        let typeName = String(describing: type(of: value))
+        guard typeName.contains("Action") else { return ([], value) }
+        guard let child = mirror.children.first else {
+            return (["\(value)"], nil)           // no-payload action case
+        }
+        let caseName = child.label ?? "\(value)"
+        let (subPath, subPayload) = buildActionPath(child.value)
+        if !subPath.isEmpty { return ([caseName] + subPath, subPayload) }
+        return ([caseName], child.value)
+    }
+
+    private static func formatActionPath(_ path: [String], index: Int) -> String {
+        guard index < path.count else { return "" }
+        let seg = ".\(path[index])"
+        guard index < path.count - 1 else { return seg }
+        return "\(seg)(\(formatActionPath(path, index: index + 1)))"
+    }
+
     // MARK: - Internal
 
     static func toJSONObject(_ value: Any) -> Any {
@@ -48,7 +85,18 @@ public enum MirrorJSON {
         if let encodable = value as? any Encodable {
             if let obj = try? JSONSerialization.jsonObject(
                 with: JSONEncoder().encode(encodable)
-            ) { return obj }
+            ) {
+                // Simplify {"caseName": {}} → "caseName" for no-payload Codable enum cases
+                // so e.g. AppRoute.reportInput encodes as "reportInput" not {"reportInput":{}}
+                let mirror = Mirror(reflecting: value)
+                if mirror.displayStyle == .enum,
+                   let dict = obj as? [String: Any], dict.count == 1,
+                   let key = dict.keys.first,
+                   let nested = dict[key] as? [String: Any], nested.isEmpty {
+                    return key
+                }
+                return obj
+            }
         }
 
         // Nil / Optional

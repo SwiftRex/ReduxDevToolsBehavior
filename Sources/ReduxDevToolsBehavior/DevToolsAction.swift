@@ -101,6 +101,10 @@ public enum DevToolsAction: Sendable, Codable {
     /// A remotedev command was received from the devtools panel.
     case _received(RemoteDevCommand)
 
+    /// Internal: signals that a decoded state snapshot is waiting in the behavior's
+    /// `PendingRestore` box and should be applied via `.reduce`. Never dispatch manually.
+    case _triggerRestore
+
     // MARK: - Commands surfaced from received messages
 
     /// Time-travel: restore the state produced by action at `index`.

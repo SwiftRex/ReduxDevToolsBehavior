@@ -4,114 +4,37 @@ import Foundation
 ///
 /// All messages are emitted as Socket.io `"log"` events with a JSON body.
 enum RemoteDevOutbound {
-    /// Sent once when the connection is established — reports the initial state and
-    /// registers the app as a named instance in the devtools panel.
-    ///
-    /// Wire format:
-    /// ```json
-    /// { "type": "INIT", "payload": "<stateJSON>", "instanceId": "<id>", "name": "<name>" }
-    /// ```
     case `init`(state: String, instanceId: String, name: String)
-
-    /// Sent after each reducer cycle — reports the dispatched action and the resulting state.
-    ///
-    /// Wire format:
-    /// ```json
-    /// { "type": "ACTION", "action": "<actionJSON>", "payload": "<stateJSON>", "instanceId": "<id>" }
-    /// ```
-    case action(action: String, state: String, instanceId: String)
+    /// Pass the original Swift action value — MirrorJSON uses runtime type names
+    /// to build the `.namespace(.action)` type path directly from the value.
+    case action(originalAction: any Sendable, state: String, instanceId: String)
 
     func toJSON() -> String {
         switch self {
         case let .`init`(state, instanceId, name):
-            // payload must be a JSON string (not an object) so the devtools can
-            // JSON.parse each snapshot independently and compute state diffs.
             let payload = jsonStringLiteral(state)
-            return """
-            {"type":"INIT","payload":\(payload),"instanceId":"\(instanceId)","name":"\(name)"}
-            """
-        case let .action(action, state, instanceId):
-            let actionPayload = normalizeAction(action)
-            let statePayload  = jsonStringLiteral(state)
-            return """
-            {"type":"ACTION","action":\(actionPayload),"payload":\(statePayload),"instanceId":"\(instanceId)"}
-            """
+            return "{\"type\":\"INIT\",\"payload\":\(payload),\"instanceId\":\"\(instanceId)\",\"name\":\"\(name)\"}"
+
+        case let .action(originalAction, state, instanceId):
+            let (typePath, payloadJSON) = MirrorJSON.actionDescription(originalAction)
+            let actionJSON = "{\"type\":\(jsonStringLiteral(typePath)),\"payload\":\(payloadJSON)}"
+            let statePayload = jsonStringLiteral(state)
+            return "{\"type\":\"ACTION\",\"action\":\(actionJSON),\"payload\":\(statePayload),\"instanceId\":\"\(instanceId)\"}"
         }
     }
 
-    /// Normalises an action JSON string into `{"type":"..."}` shape that Redux DevTools
-    /// expects. MirrorJSON produces `"caseName"` for no-payload cases and
-    /// `{"caseName": payload}` for associated-value cases — neither has a `type` key.
-    /// Nested single-key objects are flattened into a slash-separated path, e.g.
-    /// `{"calendar":{"selectDay":{...}}}` → `{"type":"calendar/selectDay","payload":{...}}`.
-    private func normalizeAction(_ json: String) -> String {
-        guard let data = json.data(using: .utf8) else { return "{\"type\":\"\(json)\"}" }
-
-        // Plain string (no-payload enum case) → {"type":"caseName"}
-        if let str = try? JSONSerialization.jsonObject(with: data) as? String {
-            return "{\"type\":\"\(str)\"}"
-        }
-
-        // Single-key object → flatten path, keep leaf as payload
-        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           obj["type"] == nil {
-            let (path, payload) = flattenPath(obj)
-            var result: [String: Any] = ["type": path]
-            if let p = payload { result["payload"] = p }
-            if let d = try? JSONSerialization.data(withJSONObject: result),
-               let s = String(data: d, encoding: .utf8) { return s }
-        }
-
-        return encodeStringForJSON(json)
-    }
-
-    /// Recursively flattens a chain of single-key dictionaries into a `/`-separated
-    /// type path, returning the leaf value as the payload.
-    /// `{"a":{"b":{"c":42}}}` → `("a/b/c", 42)`
-    /// - Parameter isNested: `true` when called recursively. At the top level a
-    ///   single String value is a no-payload sub-case name and belongs in the path
-    ///   (`{"navigation":"push"}` → `navigation/push`). Inside a nested object the
-    ///   same String is already the payload of its parent case and must not be
-    ///   appended (`{"navigation":{"push":"reportInput"}}` → `navigation/push`,
-    ///   payload `"reportInput"`, NOT `navigation/push/reportInput`).
-    private func flattenPath(_ obj: [String: Any], isNested: Bool = false) -> (String, Any?) {
-        guard obj.count == 1, let key = obj.keys.first else {
-            return (obj.keys.sorted().joined(separator: "/"), obj)
-        }
-        let value = obj[key]
-        if let str = value as? String, !isNested {
-            return ("\(key)/\(str)", nil)
-        }
-        if let nested = value as? [String: Any], nested.count == 1 {
-            let (subPath, payload) = flattenPath(nested, isNested: true)
-            return ("\(key)/\(subPath)", payload)
-        }
-        return (key, value)
-    }
-
-    /// Always returns `json` as a JSON string literal (double-encoded).
-    /// Required for `payload` so Redux DevTools JSON.parses each snapshot
-    /// independently and can compute state diffs between them.
-    /// Note: does NOT use JSONSerialization — passing a String to
-    /// dataWithJSONObject raises an NSException that try? cannot catch.
-    private func jsonStringLiteral(_ json: String) -> String {
-        let escaped = json
+    /// Double-encodes `json` as a JSON string literal so the devtools can
+    /// `JSON.parse` each snapshot independently and compute state diffs.
+    /// Uses manual escaping — passing a Swift String to JSONSerialization
+    /// raises NSInvalidArgumentException which try? cannot catch.
+    private func jsonStringLiteral(_ s: String) -> String {
+        let escaped = s
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
             .replacingOccurrences(of: "\t", with: "\\t")
         return "\"\(escaped)\""
-    }
-
-    /// Embeds `json` as a JSON value — if it already parses, embed as-is;
-    /// otherwise double-encode as a quoted string.
-    private func encodeStringForJSON(_ json: String) -> String {
-        if let data = json.data(using: .utf8),
-           (try? JSONSerialization.jsonObject(with: data)) != nil {
-            return json
-        }
-        return jsonStringLiteral(json)
     }
 }
 

@@ -55,20 +55,17 @@ public enum DevToolsBehavior {
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
         extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
-        encodeAction: (@Sendable (AppAction) -> String)? = nil,
-        encodeState:  (@Sendable (AppState?) -> String)? = nil,
-        deserializeState:  (@Sendable (String) -> AppState?)? = nil,
+        encodeState: (@Sendable (AppState?) -> String)? = nil,
+        deserializeState: (@Sendable (String) -> AppState?)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
         let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
         return lift(
             actionPrism, statePath, envPath,
-            timeMachine: timeMachineBehavior(
+            timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
-                restoreStateAction: restoreStateAction,
-                encodeAction: encodeAction,
-                encodeState: encodeState,
+                wrapDevToolsAction: actionPrism.review,
+                encodeState: encodeState ?? { $0.map { MirrorJSON.encode($0) } ?? "{}" },
                 deserializeState: deserializeState,
                 deserializeAction: deserializeAction
             )
@@ -81,47 +78,49 @@ public enum DevToolsBehavior {
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
         extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
-        encodeAction: (@Sendable (AppAction) -> String)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
         let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
         return lift(
             actionPrism, statePath, envPath,
-            timeMachine: timeMachineBehavior(
+            timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
-                restoreStateAction: restoreStateAction,
-                encodeAction: encodeAction,
+                wrapDevToolsAction: actionPrism.review,
+                encodeState: { state in
+                    guard let s = state else { return "{}" }
+                    if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
+                    return MirrorJSON.encode(s)
+                },
+                deserializeState: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) } },
                 deserializeAction: deserializeAction
             )
         )
     }
 
     /// Codable overload — both `AppState: Codable` and `AppAction: Codable`.
-    /// JSONEncoder + JSONDecoder auto-wired for all four operations (encode + decode × action + state).
-    ///
-    /// ```swift
-    /// DevToolsBehavior.behaviors(
-    ///     action: AppAction.prism.devTools,
-    ///     state: \AppState.devTools,
-    ///     environment: \AppEnvironment.devTools,
-    ///     extractDevToolsAction: { if case .devTools(let dt) = $0 { return dt }; return nil },
-    ///     restoreStateAction: { .restoreState($0) }
-    /// )
-    /// ```
     public static func behaviors<AppAction: Codable & Sendable, AppState: Codable & Sendable, AppEnvironment: Sendable>(
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
-        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil
+        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
         let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
         return lift(
             actionPrism, statePath, envPath,
-            timeMachine: timeMachineBehavior(
+            timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
-                restoreStateAction: restoreStateAction
+                wrapDevToolsAction: actionPrism.review,
+                encodeState: { state in
+                    guard let s = state else { return "{}" }
+                    if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
+                    return MirrorJSON.encode(s)
+                },
+                deserializeState: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) } },
+                deserializeAction: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppAction.self, from: $0) } }
             )
         )
     }
@@ -157,19 +156,14 @@ public enum DevToolsBehavior {
     /// ```
     public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
-        encodeAction: (@Sendable (AppAction) -> String)? = nil,
-        encodeState:  (@Sendable (AppState?) -> String)? = nil,
-        deserializeState:  (@Sendable (String) -> AppState?)? = nil,
+        encodeState: (@Sendable (AppState?) -> String)? = nil,
+        deserializeState: (@Sendable (String) -> AppState?)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-        let encode  = encodeAction ?? { MirrorJSON.encode($0) }
-        let encodeS = encodeState  ?? { $0.map { MirrorJSON.encode($0) } ?? "{}" }
-        return makeTimeMachine(
+        makeTimeMachine(
             extractDevToolsAction: extractDevToolsAction,
-            restoreStateAction: restoreStateAction,
-            encodeAction: encode,
-            encodeState: encodeS,
+            wrapDevToolsAction: nil,
+            encodeState: encodeState ?? { $0.map { MirrorJSON.encode($0) } ?? "{}" },
             deserializeState: deserializeState,
             deserializeAction: deserializeAction
         )
@@ -189,24 +183,19 @@ public enum DevToolsBehavior {
     /// ```
     public static func timeMachineBehavior<AppAction: Sendable, AppState: Codable & Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil,
-        encodeAction: (@Sendable (AppAction) -> String)? = nil,
         deserializeAction: (@Sendable (String) -> AppAction?)? = nil
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         return makeTimeMachine(
             extractDevToolsAction: extractDevToolsAction,
-            restoreStateAction: restoreStateAction,
-            encodeAction: encodeAction ?? { MirrorJSON.encode($0) },
+            wrapDevToolsAction: nil,
             encodeState: { state in
                 guard let s = state else { return "{}" }
                 if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
                 return MirrorJSON.encode(s)
             },
-            deserializeState: { json in
-                json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) }
-            },
+            deserializeState: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) } },
             deserializeAction: deserializeAction
         )
     }
@@ -224,29 +213,20 @@ public enum DevToolsBehavior {
     /// )
     /// ```
     public static func timeMachineBehavior<AppAction: Codable & Sendable, AppState: Codable & Sendable>(
-        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
-        restoreStateAction: (@Sendable (AppState) -> AppAction)? = nil
+        extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil }
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         return makeTimeMachine(
             extractDevToolsAction: extractDevToolsAction,
-            restoreStateAction: restoreStateAction,
-            encodeAction: { action in
-                if let data = try? encoder.encode(action), let str = String(data: data, encoding: .utf8) { return str }
-                return MirrorJSON.encode(action)
-            },
+            wrapDevToolsAction: nil,
             encodeState: { state in
                 guard let s = state else { return "{}" }
                 if let data = try? encoder.encode(s), let str = String(data: data, encoding: .utf8) { return str }
                 return MirrorJSON.encode(s)
             },
-            deserializeState: { json in
-                json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) }
-            },
-            deserializeAction: { json in
-                json.data(using: .utf8).flatMap { try? decoder.decode(AppAction.self, from: $0) }
-            }
+            deserializeState: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppState.self, from: $0) } },
+            deserializeAction: { json in json.data(using: .utf8).flatMap { try? decoder.decode(AppAction.self, from: $0) } }
         )
     }
 
@@ -474,7 +454,10 @@ public enum DevToolsBehavior {
 
             case .dispatchAction:
                 // Handled by timeMachineBehavior which knows the concrete AppAction type.
-                // socketBehavior has no state mutation or side effect to perform here.
+                return .doNothing
+
+            case ._triggerRestore:
+                // Handled by timeMachineBehavior which owns the PendingRestore box.
                 return .doNothing
             }
         }
@@ -486,23 +469,38 @@ public enum DevToolsBehavior {
     }
 }
 
+// MARK: - Private helpers
+
+/// Thread-safe typed box for two-phase time travel restore.
+/// The produce effect decodes a JSON string into AppState and stores it here;
+/// the subsequent reduce reads it synchronously — no deserialization in reduce.
+final class PendingRestore<S: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var state: S?
+    func set(_ s: S)    { lock.withLock { state = s } }
+    func consume() -> S? { lock.withLock { defer { state = nil }; return state } }
+}
+
 // MARK: - Private factories
 
 /// Shared implementation of all `timeMachineBehavior` overloads.
 /// All closures are fully typed — no `Any`, no casts.
 private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
     extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction?,
-    restoreStateAction: (@Sendable (AppState) -> AppAction)?,
-    encodeAction: @escaping @Sendable (AppAction) -> String,
-    encodeState:  @escaping @Sendable (AppState?) -> String,
-    deserializeState:  (@Sendable (String) -> AppState?)?,
+    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
+    encodeState: @escaping @Sendable (AppState?) -> String,
+    deserializeState: (@Sendable (String) -> AppState?)?,
     deserializeAction: (@Sendable (String) -> AppAction?)?
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-    Behavior { action, _ in
+    // Typed box for the two-phase time travel restore.
+    // Phase 1 (produce): decode JSON → store AppState here.
+    // Phase 2 (reduce):  consume typed state → assign to store, no JSON involved.
+    let pendingRestore = PendingRestore<AppState>()
+
+    return Behavior<AppAction, AppState, DevToolsEnvironment> { action, _ in
 
         if let dtAction = extractDevToolsAction(action) {
-            // On connect: send INIT immediately so the devtools panel shows the
-            // current state without waiting for the first app action.
+            // On connect: send INIT with current state immediately.
             if case ._handshakeAck = dtAction {
                 return .produce { ctx in
                     Effect.task {
@@ -520,9 +518,18 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                     }
                 }
             }
+
+            // Phase 2: consume the decoded state from the box and apply it.
+            if case ._triggerRestore = dtAction {
+                return .reduce { state in
+                    if let restored = pendingRestore.consume() { state = restored }
+                }
+            }
+
             return handleDevToolsCommand(
                 dtAction,
-                restoreStateAction: restoreStateAction,
+                wrapDevToolsAction: wrapDevToolsAction,
+                pendingRestore: pendingRestore,
                 deserializeState: deserializeState,
                 deserializeAction: deserializeAction
             )
@@ -533,7 +540,6 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 let mgr = ctx.environment.connectionManager
                 guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
 
-                let actionJSON = encodeAction(action)
                 let stateAfter = await ctx.stateAfter
                 let stateJSON  = encodeState(stateAfter)
 
@@ -549,7 +555,7 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 }
                 _ = await mgr.send(SocketCluster.transmit(
                     event: "log-noid",
-                    jsonPayload: RemoteDevOutbound.action(action: actionJSON, state: stateJSON, instanceId: instanceId).toJSON()
+                    jsonPayload: RemoteDevOutbound.action(originalAction: action, state: stateJSON, instanceId: instanceId).toJSON()
                 ))
                 return nil
             }
