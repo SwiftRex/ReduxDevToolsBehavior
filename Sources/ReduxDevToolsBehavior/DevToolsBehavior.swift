@@ -383,6 +383,10 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                         let instanceId   = await mgr.sessionInstanceId ?? ctx.environment.instanceId
                         let instanceName = ctx.environment.instanceName ?? ctx.environment.instanceId
                         _ = await mgr.checkAndMarkInitSent()
+                        // Store initial state at ring buffer index 0 so DevTools actionId N
+                        // maps directly to stateHistory[N]: actionId 0 (@@INIT) = initial state,
+                        // actionId 1 = state after first action, etc.
+                        await mgr.storeStateJSON(stateJSON)
                         _ = await mgr.send(SocketCluster.transmit(
                             event: "log-noid",
                             jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(describeAction: ctx.environment.describeAction)
@@ -512,7 +516,6 @@ private func connectionStream(
                         guard !Task.isCancelled else { break }
                         switch messageResult {
                         case let .success(.text(text)):
-                            print("[DT-RX] \(text.prefix(120))")
                             switch SocketCluster.parse(text) {
                             case .ping:
                                 Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
@@ -520,17 +523,13 @@ private func connectionStream(
                                 _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
                                 _ = await connection.send(.text(SocketCluster.subscribe(channel: "respond", cid: 3))).run()
                                 await env.connectionManager.setConnection(connection)
-                                // Use socket ID as instanceId suffix so devtools always creates a
-                                // fresh entry — avoiding stale connectionId from a prior session.
                                 let baseId = env.instanceId
                                 await env.connectionManager.setSessionInstanceId("\(baseId)/\(socketId.prefix(8))")
                                 continuation.yield(._connected(host: host, port: port))
                                 continuation.yield(._handshakeAck(socketId: socketId))
                             case let .publish(channel, payload) where channel.hasPrefix("sc-") || channel == "respond":
-                                print("[DT-RX] publish ch=\(channel) dispatch=\(parseDispatch(payload) != nil)")
                                 if let action = parseDispatch(payload) { continuation.yield(action) }
                             default:
-                                print("[DT-RX] unhandled parse result for: \(text.prefix(60))")
                                 break
                             }
                         case .success(.data): break
