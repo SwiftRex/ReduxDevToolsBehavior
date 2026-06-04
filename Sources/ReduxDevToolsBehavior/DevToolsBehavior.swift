@@ -375,10 +375,11 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             // On connect: send INIT with current state immediately.
             if case ._handshakeAck = dtAction {
                 return .produce { ctx in
-                    Effect.task {
+                    let snapshot = MainActor.assumeIsolated { ctx.stateAfter }
+                    return Effect.task { [snapshot] in
                         let mgr = ctx.environment.connectionManager
                         guard await mgr.isConnected else { return nil }
-                        let stateJSON    = ctx.environment.encodeAny.run(await ctx.stateAfter as Any).value ?? "{}"
+                        let stateJSON = ctx.environment.encodeAny.run(snapshot as Any).value ?? "{}"
                         let instanceId   = ctx.environment.instanceId
                         let instanceName = ctx.environment.instanceName ?? instanceId
                         _ = await mgr.checkAndMarkInitSent()
@@ -406,13 +407,16 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
         }
 
         return .produce { ctx in
-            Effect.task {
+            // Phase 3 runs synchronously after this action's reducers, before any
+            // subsequent action is dispatched. Snapshot State (Sendable) here so
+            // the async task records the correct post-reducer value. Encoding stays
+            // in the task — only the raw state needs the synchronous capture.
+            let snapshot = MainActor.assumeIsolated { ctx.stateAfter }
+            return Effect.task { [snapshot] in
                 let mgr = ctx.environment.connectionManager
                 guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
 
-                let stateAfter = await ctx.stateAfter
-                let stateJSON  = ctx.environment.encodeAny.run(stateAfter as Any).value ?? "{}"
-
+                let stateJSON = ctx.environment.encodeAny.run(snapshot as Any).value ?? "{}"
                 await mgr.storeStateJSON(stateJSON)
 
                 let instanceId   = ctx.environment.instanceId
