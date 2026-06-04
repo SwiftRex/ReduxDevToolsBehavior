@@ -380,8 +380,8 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                         let mgr = ctx.environment.connectionManager
                         guard await mgr.isConnected else { return nil }
                         let stateJSON = ctx.environment.encodeAny.run(snapshot as Any).value ?? "{}"
-                        let instanceId   = ctx.environment.instanceId
-                        let instanceName = ctx.environment.instanceName ?? instanceId
+                        let instanceId   = await mgr.sessionInstanceId ?? ctx.environment.instanceId
+                        let instanceName = ctx.environment.instanceName ?? ctx.environment.instanceId
                         _ = await mgr.checkAndMarkInitSent()
                         _ = await mgr.send(SocketCluster.transmit(
                             event: "log-noid",
@@ -516,12 +516,13 @@ private func connectionStream(
                             case .ping:
                                 Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
                             case .handshakeAck(let socketId, _):
-                                // sc-{socketId}: commands targeted at this specific socket
                                 _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
-                                // respond: broadcast fallback used when the devtools panel
-                                // hasn't resolved our connectionId yet (e.g. first JUMP_TO_ACTION)
                                 _ = await connection.send(.text(SocketCluster.subscribe(channel: "respond", cid: 3))).run()
                                 await env.connectionManager.setConnection(connection)
+                                // Use socket ID as instanceId suffix so devtools always creates a
+                                // fresh entry — avoiding stale connectionId from a prior session.
+                                let baseId = env.instanceId
+                                await env.connectionManager.setSessionInstanceId("\(baseId)/\(socketId.prefix(8))")
                                 continuation.yield(._connected(host: host, port: port))
                                 continuation.yield(._handshakeAck(socketId: socketId))
                             case let .publish(channel, payload) where channel.hasPrefix("sc-") || channel == "respond":

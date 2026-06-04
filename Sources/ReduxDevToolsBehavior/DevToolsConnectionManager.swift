@@ -40,14 +40,22 @@ public actor DevToolsConnectionManager {
 
     /// Sets (or clears) the live connection. Resets the INIT flag and
     /// clears the state JSON history so a new session starts fresh.
+    /// Session-scoped instance ID: `baseInstanceId + "/" + socketId.prefix(8)`.
+    /// Changes on every new connection so the devtools creates a fresh entry
+    /// (avoiding stale `connectionId` from a previous session).
+    private(set) var sessionInstanceId: String?
+
     func setConnection(_ connection: WebSocketConnection?) {
         self.connection?.close()
         self.connection = connection
+        sessionInstanceId = nil
         hasSentInit = false
         stateJSONHistory = []
         historyBaseIndex = 0
         skippedActionIds = []
     }
+
+    func setSessionInstanceId(_ id: String) { sessionInstanceId = id }
 
     /// Whether a connection is currently open.
     var isConnected: Bool { connection != nil }
