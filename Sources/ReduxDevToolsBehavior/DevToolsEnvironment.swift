@@ -74,6 +74,12 @@ public struct DevToolsEnvironment: Sendable {
     /// Swap this out to customise how non-`Encodable` state is displayed in the devtools panel.
     public var encodeAny: Convert<Any, String, Never>
 
+    /// Produces the Redux DevTools action description: `(typePath, payloadJSON)`.
+    /// `typePath` is the `.namespace(.action)` string shown in the action list.
+    /// `payloadJSON` is the leaf associated value encoded as JSON.
+    /// Defaults to `MirrorJSON`-based type-name traversal in the live environment.
+    public var describeAction: Convert<Any, (typePath: String, payloadJSON: String), Never>
+
     // MARK: - Instance identity
 
     /// Unique key shown in the devtools instance list. Defaults to the bundle identifier.
@@ -110,6 +116,7 @@ public struct DevToolsEnvironment: Sendable {
         encoderFactory: any DataEncoderFactory & Sendable,
         decoderFactory: any DataDecoderFactory & Sendable,
         encodeAny: Convert<Any, String, Never>,
+        describeAction: Convert<Any, (typePath: String, payloadJSON: String), Never>,
         instanceId: String,
         instanceName: String? = nil,
         connectionMode: ConnectionMode = .manual
@@ -123,6 +130,7 @@ public struct DevToolsEnvironment: Sendable {
         self.encoderFactory    = encoderFactory
         self.decoderFactory    = decoderFactory
         self.encodeAny         = encodeAny
+        self.describeAction    = describeAction
         self.instanceId        = instanceId
         self.instanceName      = instanceName
         self.connectionMode    = connectionMode

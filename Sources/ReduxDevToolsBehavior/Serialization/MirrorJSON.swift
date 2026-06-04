@@ -53,7 +53,7 @@ public enum MirrorJSON {
     ///
     /// Example: `AppAction.navigation(.push(.reportInput))`
     /// → type `".navigation(.push)"`, payload `"reportInput"`
-    static func actionDescription(_ value: Any, encoder: Convert<Any, String, Never>) -> (type: String, payloadJSON: String) {
+    static func actionDescription(_ value: Any, encoder: Convert<Any, String, Never>) -> (typePath: String, payloadJSON: String) {
         let (path, payload) = buildActionPath(value)
         let typeName = formatActionPath(path, index: 0)
         let payloadJSON = payload.map { encoder.run($0).value } ?? "{}"

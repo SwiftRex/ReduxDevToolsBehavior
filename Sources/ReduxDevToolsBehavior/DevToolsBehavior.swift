@@ -384,7 +384,7 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                         _ = await mgr.checkAndMarkInitSent()
                         _ = await mgr.send(SocketCluster.transmit(
                             event: "log-noid",
-                            jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(encoder: ctx.environment.encodeAny)
+                            jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(describeAction: ctx.environment.describeAction)
                         ))
                         return nil
                     }
@@ -420,12 +420,12 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 if await mgr.checkAndMarkInitSent() {
                     _ = await mgr.send(SocketCluster.transmit(
                         event: "log-noid",
-                        jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(encoder: ctx.environment.encodeAny)
+                        jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(describeAction: ctx.environment.describeAction)
                     ))
                 }
                 _ = await mgr.send(SocketCluster.transmit(
                     event: "log-noid",
-                    jsonPayload: RemoteDevOutbound.action(originalAction: action, state: stateJSON, instanceId: instanceId).toJSON(encoder: ctx.environment.encodeAny)
+                    jsonPayload: RemoteDevOutbound.action(originalAction: action, state: stateJSON, instanceId: instanceId).toJSON(describeAction: ctx.environment.describeAction)
                 ))
                 return nil
             }

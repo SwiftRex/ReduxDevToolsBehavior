@@ -59,9 +59,13 @@ extension DevToolsEnvironment {
         urlSession: URLSession = .shared
     ) -> DevToolsEnvironment {
         let manager = DevToolsConnectionManager(maxHistorySize: maxHistorySize)
-        // Concrete encoder/decoder are hidden here — callers inject protocol types.
+        // Concrete encoder/decoder and MirrorJSON are hidden here — callers inject abstractions.
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
+        let encodeAny = Convert<Any, String, Never> { .success(MirrorJSON.encode($0, using: encoder)) }
+        let describeAction = Convert<Any, (typePath: String, payloadJSON: String), Never> {
+            .success(MirrorJSON.actionDescription($0, encoder: encodeAny))
+        }
 
         return DevToolsEnvironment(
             connectionManager: manager,
@@ -89,7 +93,8 @@ extension DevToolsEnvironment {
 
             encoderFactory: encoder,
             decoderFactory: decoder,
-            encodeAny: Convert { .success(MirrorJSON.encode($0, using: encoder)) },
+            encodeAny:      encodeAny,
+            describeAction: describeAction,
             instanceId:     instanceId,
             instanceName:   instanceName,
             connectionMode: connectionMode
