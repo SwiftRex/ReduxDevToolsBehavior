@@ -512,6 +512,7 @@ private func connectionStream(
                         guard !Task.isCancelled else { break }
                         switch messageResult {
                         case let .success(.text(text)):
+                            print("[DT-RX] \(text.prefix(120))")
                             switch SocketCluster.parse(text) {
                             case .ping:
                                 Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
@@ -526,8 +527,10 @@ private func connectionStream(
                                 continuation.yield(._connected(host: host, port: port))
                                 continuation.yield(._handshakeAck(socketId: socketId))
                             case let .publish(channel, payload) where channel.hasPrefix("sc-") || channel == "respond":
+                                print("[DT-RX] publish ch=\(channel) dispatch=\(parseDispatch(payload) != nil)")
                                 if let action = parseDispatch(payload) { continuation.yield(action) }
                             default:
+                                print("[DT-RX] unhandled parse result for: \(text.prefix(60))")
                                 break
                             }
                         case .success(.data): break
