@@ -14,7 +14,11 @@ protocol _JSONDecodable {
     static func _decode(from data: Data, using factory: any DataDecoderFactory) -> Self?
 }
 
-extension Decodable {
+// Conformance declared in the same module as _JSONDecodable so that
+// `AppState.self as? any _JSONDecodable.Type` succeeds at runtime for any Decodable type.
+// Without this explicit conformance the method exists on Decodable but the runtime
+// protocol-conformance record is absent, so the `as?` cast always fails.
+extension Decodable: _JSONDecodable {
     static func _decode(from data: Data, using factory: any DataDecoderFactory) -> Self? {
         try? factory.dataDecoder(for: Self.self).run(data).get()
     }
