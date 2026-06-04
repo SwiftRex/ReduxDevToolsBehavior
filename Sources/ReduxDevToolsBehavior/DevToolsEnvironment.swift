@@ -58,6 +58,16 @@ public struct DevToolsEnvironment: Sendable {
     /// Resolves a discovered service to its concrete host, port, and IP addresses.
     public var resolveService: @Sendable (DiscoveredService) -> DeferredTask<Result<ResolvedService, Error>>
 
+    // MARK: - Serialization
+
+    /// Used by `timeMachineBehavior` to encode state snapshots.
+    /// Override to customise date format, key strategy, etc.
+    public var jsonEncoder: JSONEncoder
+
+    /// Used by `timeMachineBehavior` to decode state snapshots for time travel,
+    /// and to decode actions typed in the Dispatcher tab.
+    public var jsonDecoder: JSONDecoder
+
     // MARK: - Instance identity
 
     /// Unique key shown in the devtools instance list. Defaults to the bundle identifier.
@@ -91,6 +101,8 @@ public struct DevToolsEnvironment: Sendable {
         openConnection: @escaping @Sendable (String, UInt16) -> DeferredTask<Result<WebSocketConnection, Error>>,
         browseServices: @escaping @Sendable (String) -> DeferredStream<Result<DiscoveredServiceEvent, Error>>,
         resolveService: @escaping @Sendable (DiscoveredService) -> DeferredTask<Result<ResolvedService, Error>>,
+        jsonEncoder: JSONEncoder = JSONEncoder(),
+        jsonDecoder: JSONDecoder = JSONDecoder(),
         instanceId: String,
         instanceName: String? = nil,
         connectionMode: ConnectionMode = .manual
@@ -99,6 +111,8 @@ public struct DevToolsEnvironment: Sendable {
         self.openConnection    = openConnection
         self.browseServices    = browseServices
         self.resolveService    = resolveService
+        self.jsonEncoder       = jsonEncoder
+        self.jsonDecoder       = jsonDecoder
         self.instanceId        = instanceId
         self.instanceName      = instanceName
         self.connectionMode    = connectionMode

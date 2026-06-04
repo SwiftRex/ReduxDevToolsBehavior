@@ -7,30 +7,31 @@ import SwiftRexConcurrency
 
 /// Handles a `DevToolsAction` intercepted by `timeMachineBehavior` before regular recording.
 ///
-/// All serialization closures are typed — no `Any` conversions, no runtime casts.
+/// Serialization is done via `ctx.environment.jsonDecoder` — no captured closures.
+/// `AppState` and `AppAction` are decoded with `String.jsonDecode(as:using:)`, which
+/// uses the `_JSONDecodable` protocol dispatch and returns `nil` when the type is not
+/// `Decodable` at runtime (time travel / Dispatcher tab silently no-ops).
 func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
     _ command: DevToolsAction,
     wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
-    pendingRestore: PendingRestore<AppState>,
-    deserializeState: (@Sendable (String) -> AppState?)?,
-    deserializeAction: (@Sendable (String) -> AppAction?)?
+    pendingRestore: PendingRestore<AppState>
 ) -> Consequence<AppState, DevToolsEnvironment, AppAction> {
 
     switch command {
 
     case let .jumpToAction(index), let .jumpToState(index):
-        guard let decode = deserializeState else { return .doNothing }
         return .produce { ctx in
             Effect.task {
                 guard let json = await ctx.environment.connectionManager.stateJSON(at: index),
-                      let state = decode(json) else { return nil }
-                pendingRestore.set(state)                          // typed AppState, no JSON in reduce
-                return wrapDevToolsAction?(._triggerRestore)
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let wrap  = wrapDevToolsAction
+                else { return nil }
+                pendingRestore.set(state)
+                return wrap(._triggerRestore)
             }
         }
 
     case let .toggleAction(id):
-        guard let decode = deserializeState else { return .doNothing }
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
@@ -39,9 +40,10 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                 let base         = await mgr.historyBaseIndex
                 let idx          = await mgr.latestNonSkippedIndex(upTo: targetIndex) ?? base
                 guard let json = await mgr.stateJSON(at: idx),
-                      let state = decode(json) else { return nil }
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let wrap  = wrapDevToolsAction
+                else { return nil }
                 pendingRestore.set(state)
-                guard let wrap = wrapDevToolsAction else { return nil }
                 return wrap(._triggerRestore)
             }
         }
@@ -62,15 +64,6 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
         }
 
     case let .importState(lifted):
-        guard let decode = deserializeState else {
-            return .produce { ctx in
-                Effect.fireAndForget {
-                    let mgr = ctx.environment.connectionManager
-                    await mgr.replaceStateJSONs(lifted.computedStateJSONs)
-                    await mgr.setSkippedActionIds(lifted.skippedActionIds)
-                }
-            }
-        }
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
@@ -79,16 +72,18 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                 let base = await mgr.historyBaseIndex
                 let idx  = await mgr.latestNonSkippedIndex(upTo: lifted.currentStateIndex) ?? base
                 guard let json = await mgr.stateJSON(at: idx),
-                      let state = decode(json) else { return nil }
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let wrap  = wrapDevToolsAction
+                else { return nil }
                 pendingRestore.set(state)
-                guard let wrap = wrapDevToolsAction else { return nil }
                 return wrap(._triggerRestore)
             }
         }
 
     case let .dispatchAction(actionJSON: json):
-        guard let decode = deserializeAction else { return .doNothing }
-        return .produce { _ in Effect.task { decode(json) } }
+        return .produce { ctx in
+            Effect.task { json.jsonDecode(as: AppAction.self, using: ctx.environment.jsonDecoder) }
+        }
 
     case .pause:
         return .produce { ctx in Effect.fireAndForget { await ctx.environment.connectionManager.setPaused(true) } }
@@ -106,18 +101,12 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
 
 // MARK: - Deprecated free functions
 
-/// - Important: Deprecated. Use ``DevToolsBehavior/behaviors(action:state:environment:extractDevToolsAction:restoreStateAction:encodeAction:encodeState:deserializeState:deserializeAction:)`` instead.
-@available(*, deprecated, message: "Use DevToolsBehavior.behaviors(action:state:environment:) — serialization is now configured there, not in the environment.")
+/// - Important: Deprecated. Use ``DevToolsBehavior/behaviors(action:state:environment:)`` instead.
+@available(*, deprecated, message: "Use DevToolsBehavior.behaviors(action:state:environment:) — serialization is now handled via DevToolsEnvironment.jsonEncoder/jsonDecoder.")
 public func makeDevToolsRecorder<AppAction: Sendable, AppState: Sendable>(
     instanceId: String,
     instanceName: String? = nil,
-    extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil },
-    deserializeState: (@Sendable (String) -> AppState?)? = nil,
-    encodeState: (@Sendable (AppState?) -> String)? = nil
+    extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil }
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-    DevToolsBehavior.timeMachineBehavior(
-        extractDevToolsAction: extractDevToolsAction,
-        encodeState: encodeState,
-        deserializeState: deserializeState
-    )
+    DevToolsBehavior.timeMachineBehavior(extractDevToolsAction: extractDevToolsAction)
 }

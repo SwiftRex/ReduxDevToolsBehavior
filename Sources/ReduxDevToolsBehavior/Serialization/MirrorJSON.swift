@@ -33,8 +33,10 @@ import Foundation
 public enum MirrorJSON {
     /// Encodes `value` to a compact JSON string using Mirror reflection.
     /// Always succeeds — falls back to `"\"\(value)\""` for unrepresentable types.
-    public static func encode(_ value: Any) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: toJSONObject(value)),
+    /// Passes `encoder` to the `Encodable` fast path so caller-configured
+    /// date formats, key strategies, etc. are respected.
+    public static func encode(_ value: Any, using encoder: JSONEncoder = JSONEncoder()) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: toJSONObject(value, encoder: encoder)),
               let string = String(data: data, encoding: .utf8) else {
             return "\"\(value)\""
         }
@@ -80,12 +82,10 @@ public enum MirrorJSON {
 
     // MARK: - Internal
 
-    static func toJSONObject(_ value: Any) -> Any {
-        // Encodable fast path — highest fidelity
+    static func toJSONObject(_ value: Any, encoder: JSONEncoder = JSONEncoder()) -> Any {
+        // Encodable fast path — highest fidelity; uses caller's encoder configuration
         if let encodable = value as? any Encodable {
-            if let obj = try? JSONSerialization.jsonObject(
-                with: JSONEncoder().encode(encodable)
-            ) {
+            if let obj = try? JSONSerialization.jsonObject(with: encoder.encode(encodable)) {
                 // Simplify {"caseName": {}} → "caseName" for no-payload Codable enum cases
                 // so e.g. AppRoute.reportInput encodes as "reportInput" not {"reportInput":{}}
                 let mirror = Mirror(reflecting: value)
@@ -103,7 +103,7 @@ public enum MirrorJSON {
         let mirror = Mirror(reflecting: value)
         if mirror.displayStyle == .optional {
             if let child = mirror.children.first {
-                return toJSONObject(child.value)
+                return toJSONObject(child.value, encoder: encoder)
             }
             return NSNull()
         }
@@ -142,27 +142,27 @@ public enum MirrorJSON {
                 // All labels present → object; otherwise array/single value
                 if children.allSatisfy({ $0.label != nil && !($0.label!.starts(with: ".")) }) {
                     var dict: [String: Any] = [:]
-                    for c in children { dict[c.label!] = toJSONObject(c.value) }
+                    for c in children { dict[c.label!] = toJSONObject(c.value, encoder: encoder) }
                     return [caseName: dict]
                 } else if children.count == 1 {
-                    return [caseName: toJSONObject(children[0].value)]
+                    return [caseName: toJSONObject(children[0].value, encoder: encoder)]
                 } else {
-                    return [caseName: children.map { toJSONObject($0.value) }]
+                    return [caseName: children.map { toJSONObject($0.value, encoder: encoder) }]
                 }
             }
-            return [caseName: toJSONObject(payload)]
+            return [caseName: toJSONObject(payload, encoder: encoder)]
 
         case .struct, .class:
             var dict: [String: Any] = [:]
             for child in mirror.children {
                 if let label = child.label {
-                    dict[label] = toJSONObject(child.value)
+                    dict[label] = toJSONObject(child.value, encoder: encoder)
                 }
             }
             return dict
 
         case .collection, .set:
-            return mirror.children.map { toJSONObject($0.value) }
+            return mirror.children.map { toJSONObject($0.value, encoder: encoder) }
 
         case .dictionary:
             var dict: [String: Any] = [:]
@@ -170,8 +170,8 @@ public enum MirrorJSON {
                 let pair = Mirror(reflecting: child.value)
                 let children = Array(pair.children)
                 if children.count == 2 {
-                    let key = "\(toJSONObject(children[0].value))"
-                    dict[key] = toJSONObject(children[1].value)
+                    let key = "\(toJSONObject(children[0].value, encoder: encoder))"
+                    dict[key] = toJSONObject(children[1].value, encoder: encoder)
                 }
             }
             return dict
@@ -180,10 +180,10 @@ public enum MirrorJSON {
             let children = Array(mirror.children)
             if children.allSatisfy({ $0.label != nil && !($0.label!.starts(with: ".")) }) {
                 var dict: [String: Any] = [:]
-                for c in children { dict[c.label!] = toJSONObject(c.value) }
+                for c in children { dict[c.label!] = toJSONObject(c.value, encoder: encoder) }
                 return dict
             }
-            return children.map { toJSONObject($0.value) }
+            return children.map { toJSONObject($0.value, encoder: encoder) }
 
         default:
             return "\(value)"
