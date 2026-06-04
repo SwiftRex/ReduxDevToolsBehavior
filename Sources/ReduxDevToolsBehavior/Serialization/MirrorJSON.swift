@@ -37,7 +37,11 @@ public enum MirrorJSON {
     /// Passes `encoder` to the `Encodable` fast path so caller-configured
     /// date formats, key strategies, etc. are respected.
     public static func encode(_ value: Any, using encoder: JSONEncoder = JSONEncoder()) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: toJSONObject(value, encoder: encoder)),
+        // .fragmentsAllowed is required: toJSONObject may return a String or NSNumber
+        // (e.g. "reportInput" after simplifying {"reportInput":{}} for no-payload Codable enums).
+        // JSONSerialization raises NSInvalidArgumentException — not a Swift error — for primitives
+        // at the top level without this option, and try? cannot catch NSExceptions.
+        guard let data = try? JSONSerialization.data(withJSONObject: toJSONObject(value, encoder: encoder), options: .fragmentsAllowed),
               let string = String(data: data, encoding: .utf8) else {
             return "\"\(value)\""
         }
