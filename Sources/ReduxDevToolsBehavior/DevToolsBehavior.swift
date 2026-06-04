@@ -516,11 +516,15 @@ private func connectionStream(
                             case .ping:
                                 Task { _ = await connection.send(.text(SocketCluster.pong)).run() }
                             case .handshakeAck(let socketId, _):
+                                // sc-{socketId}: commands targeted at this specific socket
                                 _ = await connection.send(.text(SocketCluster.subscribe(channel: "sc-\(socketId)", cid: 2))).run()
+                                // respond: broadcast fallback used when the devtools panel
+                                // hasn't resolved our connectionId yet (e.g. first JUMP_TO_ACTION)
+                                _ = await connection.send(.text(SocketCluster.subscribe(channel: "respond", cid: 3))).run()
                                 await env.connectionManager.setConnection(connection)
                                 continuation.yield(._connected(host: host, port: port))
                                 continuation.yield(._handshakeAck(socketId: socketId))
-                            case let .publish(channel, payload) where channel.hasPrefix("sc-"):
+                            case let .publish(channel, payload) where channel.hasPrefix("sc-") || channel == "respond":
                                 if let action = parseDispatch(payload) { continuation.yield(action) }
                             default:
                                 break
