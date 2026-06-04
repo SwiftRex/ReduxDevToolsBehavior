@@ -1,5 +1,6 @@
 #if canImport(Darwin)
 import BonjourService
+import Core
 import FP
 import Foundation
 import WebSocketClient
@@ -58,6 +59,9 @@ extension DevToolsEnvironment {
         urlSession: URLSession = .shared
     ) -> DevToolsEnvironment {
         let manager = DevToolsConnectionManager(maxHistorySize: maxHistorySize)
+        // Concrete encoder/decoder are hidden here — callers inject protocol types.
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
 
         return DevToolsEnvironment(
             connectionManager: manager,
@@ -83,6 +87,9 @@ extension DevToolsEnvironment {
                 .map { $0.map(ResolvedService.from(resolved:)) }
             },
 
+            encoderFactory: encoder,
+            decoderFactory: decoder,
+            encodeAny: Convert { .success(MirrorJSON.encode($0, using: encoder)) },
             instanceId:     instanceId,
             instanceName:   instanceName,
             connectionMode: connectionMode

@@ -1,3 +1,4 @@
+import Core
 import Foundation
 
 /// Messages sent FROM the iOS app TO the remotedev-server.
@@ -9,14 +10,14 @@ enum RemoteDevOutbound {
     /// to build the `.namespace(.action)` type path directly from the value.
     case action(originalAction: any Sendable, state: String, instanceId: String)
 
-    func toJSON() -> String {
+    func toJSON(encoder: Convert<Any, String, Never>) -> String {
         switch self {
         case let .`init`(state, instanceId, name):
             let payload = jsonStringLiteral(state)
             return "{\"type\":\"INIT\",\"payload\":\(payload),\"instanceId\":\"\(instanceId)\",\"name\":\"\(name)\"}"
 
         case let .action(originalAction, state, instanceId):
-            let (typePath, payloadJSON) = MirrorJSON.actionDescription(originalAction)
+            let (typePath, payloadJSON) = MirrorJSON.actionDescription(originalAction, encoder: encoder)
             let actionJSON = "{\"type\":\(jsonStringLiteral(typePath)),\"payload\":\(payloadJSON)}"
             let statePayload = jsonStringLiteral(state)
             return "{\"type\":\"ACTION\",\"action\":\(actionJSON),\"payload\":\(statePayload),\"instanceId\":\"\(instanceId)\"}"

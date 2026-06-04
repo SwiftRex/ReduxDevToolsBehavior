@@ -23,6 +23,7 @@ let package = Package(
             dependencies: [
                 .product(name: "SwiftRex",            package: "SwiftRex"),
                 .product(name: "SwiftRex.Concurrency", package: "SwiftRex"),
+                .product(name: "Core",                 package: "NetworkTools"),
                 .product(name: "WebSocketClient",      package: "NetworkTools"),
                 .product(name: "BonjourService",       package: "NetworkTools"),
                 .product(name: "FP",                   package: "FP"),

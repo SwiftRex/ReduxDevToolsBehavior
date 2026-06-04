@@ -1,3 +1,4 @@
+import Core
 import FP
 import Foundation
 import WebSocketClient
@@ -60,13 +61,18 @@ public struct DevToolsEnvironment: Sendable {
 
     // MARK: - Serialization
 
-    /// Used by `timeMachineBehavior` to encode state snapshots.
-    /// Override to customise date format, key strategy, etc.
-    public var jsonEncoder: JSONEncoder
+    /// Produces typed `DataEncoder<T>` converters for `Encodable` state/action types.
+    /// Defaults to `JSONEncoder` in the live environment.
+    public var encoderFactory: any DataEncoderFactory & Sendable
 
-    /// Used by `timeMachineBehavior` to decode state snapshots for time travel,
-    /// and to decode actions typed in the Dispatcher tab.
-    public var jsonDecoder: JSONDecoder
+    /// Produces typed `DataDecoder<T>` converters for `Decodable` state/action types.
+    /// Defaults to `JSONDecoder` in the live environment.
+    public var decoderFactory: any DataDecoderFactory & Sendable
+
+    /// Encodes any value (including non-`Encodable` types) to a JSON string.
+    /// Defaults to `MirrorJSON` backed by the live `encoderFactory` in the live environment.
+    /// Swap this out to customise how non-`Encodable` state is displayed in the devtools panel.
+    public var encodeAny: Convert<Any, String, Never>
 
     // MARK: - Instance identity
 
@@ -101,8 +107,9 @@ public struct DevToolsEnvironment: Sendable {
         openConnection: @escaping @Sendable (String, UInt16) -> DeferredTask<Result<WebSocketConnection, Error>>,
         browseServices: @escaping @Sendable (String) -> DeferredStream<Result<DiscoveredServiceEvent, Error>>,
         resolveService: @escaping @Sendable (DiscoveredService) -> DeferredTask<Result<ResolvedService, Error>>,
-        jsonEncoder: JSONEncoder = JSONEncoder(),
-        jsonDecoder: JSONDecoder = JSONDecoder(),
+        encoderFactory: any DataEncoderFactory & Sendable,
+        decoderFactory: any DataDecoderFactory & Sendable,
+        encodeAny: Convert<Any, String, Never>,
         instanceId: String,
         instanceName: String? = nil,
         connectionMode: ConnectionMode = .manual
@@ -111,8 +118,11 @@ public struct DevToolsEnvironment: Sendable {
         self.openConnection    = openConnection
         self.browseServices    = browseServices
         self.resolveService    = resolveService
-        self.jsonEncoder       = jsonEncoder
-        self.jsonDecoder       = jsonDecoder
+        // @unchecked because JSONEncoder/JSONDecoder are not formally Sendable pre-Swift 6
+        // but are safe to share across actors (they have no mutable shared state).
+        self.encoderFactory    = encoderFactory
+        self.decoderFactory    = decoderFactory
+        self.encodeAny         = encodeAny
         self.instanceId        = instanceId
         self.instanceName      = instanceName
         self.connectionMode    = connectionMode

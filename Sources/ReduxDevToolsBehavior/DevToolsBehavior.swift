@@ -1,3 +1,4 @@
+import Core
 import FP
 import Foundation
 import SwiftRex
@@ -377,13 +378,13 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                     Effect.task {
                         let mgr = ctx.environment.connectionManager
                         guard await mgr.isConnected else { return nil }
-                        let stateJSON    = MirrorJSON.encode(await ctx.stateAfter as Any, using: ctx.environment.jsonEncoder)
+                        let stateJSON    = ctx.environment.encodeAny.run(await ctx.stateAfter as Any).value ?? "{}"
                         let instanceId   = ctx.environment.instanceId
                         let instanceName = ctx.environment.instanceName ?? instanceId
                         _ = await mgr.checkAndMarkInitSent()
                         _ = await mgr.send(SocketCluster.transmit(
                             event: "log-noid",
-                            jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
+                            jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(encoder: ctx.environment.encodeAny)
                         ))
                         return nil
                     }
@@ -410,7 +411,7 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
 
                 let stateAfter = await ctx.stateAfter
-                let stateJSON  = MirrorJSON.encode(stateAfter as Any, using: ctx.environment.jsonEncoder)
+                let stateJSON  = ctx.environment.encodeAny.run(stateAfter as Any).value ?? "{}"
 
                 await mgr.storeStateJSON(stateJSON)
 
@@ -419,12 +420,12 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 if await mgr.checkAndMarkInitSent() {
                     _ = await mgr.send(SocketCluster.transmit(
                         event: "log-noid",
-                        jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON()
+                        jsonPayload: RemoteDevOutbound.`init`(state: stateJSON, instanceId: instanceId, name: instanceName).toJSON(encoder: ctx.environment.encodeAny)
                     ))
                 }
                 _ = await mgr.send(SocketCluster.transmit(
                     event: "log-noid",
-                    jsonPayload: RemoteDevOutbound.action(originalAction: action, state: stateJSON, instanceId: instanceId).toJSON()
+                    jsonPayload: RemoteDevOutbound.action(originalAction: action, state: stateJSON, instanceId: instanceId).toJSON(encoder: ctx.environment.encodeAny)
                 ))
                 return nil
             }

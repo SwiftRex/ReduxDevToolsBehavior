@@ -1,3 +1,4 @@
+import Core
 import FP
 import Foundation
 import SwiftRex
@@ -23,7 +24,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
         return .produce { ctx in
             Effect.task {
                 guard let json = await ctx.environment.connectionManager.stateJSON(at: index),
-                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
@@ -40,7 +41,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                 let base         = await mgr.historyBaseIndex
                 let idx          = await mgr.latestNonSkippedIndex(upTo: targetIndex) ?? base
                 guard let json = await mgr.stateJSON(at: idx),
-                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
@@ -72,7 +73,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                 let base = await mgr.historyBaseIndex
                 let idx  = await mgr.latestNonSkippedIndex(upTo: lifted.currentStateIndex) ?? base
                 guard let json = await mgr.stateJSON(at: idx),
-                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.jsonDecoder),
+                      let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
@@ -82,7 +83,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
 
     case let .dispatchAction(actionJSON: json):
         return .produce { ctx in
-            Effect.task { json.jsonDecode(as: AppAction.self, using: ctx.environment.jsonDecoder) }
+            Effect.task { json.jsonDecode(as: AppAction.self, using: ctx.environment.decoderFactory) }
         }
 
     case .pause:
