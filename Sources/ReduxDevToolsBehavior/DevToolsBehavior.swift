@@ -397,9 +397,15 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             }
 
             // Phase 2: consume the decoded state from the box and apply it.
+            // The produce clears the time-travel flag after the restore — any actions
+            // dispatched as a side-effect of the state change (e.g. UI lifecycle) are
+            // suppressed until the flag is cleared.
             if case ._triggerRestore = dtAction {
                 return .reduce { state in
                     if let restored = pendingRestore.consume() { state = restored }
+                }
+                .produce { ctx in
+                    Effect.fireAndForget { await ctx.environment.connectionManager.setTimeTraveling(false) }
                 }
             }
 
