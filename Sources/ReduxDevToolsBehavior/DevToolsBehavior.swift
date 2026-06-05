@@ -62,7 +62,8 @@ public enum DevToolsBehavior {
             actionPrism, statePath, envPath,
             timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
-                wrapDevToolsAction: actionPrism.review
+                wrapDevToolsAction: actionPrism.review,
+                statePath: statePath
             )
         )
     }
@@ -102,7 +103,7 @@ public enum DevToolsBehavior {
     public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil }
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil)
+        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil, statePath: nil)
     }
 
     /// The socket-lifecycle behavior: connection, browsing, and devtools command routing.
@@ -247,10 +248,10 @@ public enum DevToolsBehavior {
                 return socketCommandConsequence(command)
 
             case let .jumpToAction(index):
-                return .reduce { $0.currentActionIndex = index }
+                return .reduce { $0.currentActionIndex = index; $0.isTimeTraveling = true }
 
             case let .jumpToState(index):
-                return .reduce { $0.currentActionIndex = index }
+                return .reduce { $0.currentActionIndex = index; $0.isTimeTraveling = true }
 
             case let .toggleAction(id):
                 return .reduce { state in
@@ -259,6 +260,7 @@ public enum DevToolsBehavior {
                     } else {
                         state.skippedActionIds.insert(id)
                     }
+                    state.isTimeTraveling = true
                 }
 
             case .reset:
@@ -267,6 +269,7 @@ public enum DevToolsBehavior {
                     $0.actionHistory = []
                     $0.skippedActionIds = []
                     $0.currentActionIndex = nil
+                    $0.isTimeTraveling = false
                 }
                 .produce { ctx in
                     Effect.fireAndForget { await ctx.environment.connectionManager.resetStateJSONs() }
@@ -279,6 +282,7 @@ public enum DevToolsBehavior {
                         state.actionHistory = [la]
                         state.skippedActionIds = []
                         state.currentActionIndex = nil
+                        state.isTimeTraveling = false
                     }
                 }
                 .produce { ctx in
@@ -287,6 +291,7 @@ public enum DevToolsBehavior {
 
             case .rollback:
                 return .reduce { state in
+                    state.isTimeTraveling = false
                     if state.stateHistory.count > 1 {
                         state.stateHistory.removeLast()
                         state.actionHistory.removeLast()
@@ -362,7 +367,8 @@ final class PendingRestore<S: Sendable>: @unchecked Sendable {
 /// All closures are fully typed — no `Any`, no casts.
 private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
     extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction?,
-    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?
+    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
+    statePath: WritableKeyPath<AppState, DevToolsState>?
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
     // Typed box for the two-phase time travel restore.
     // Phase 1 (produce): decode JSON → store AppState here.
@@ -401,13 +407,20 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             // dispatched as a side-effect of the state change (e.g. UI lifecycle) are
             // suppressed until the flag is cleared.
             if case ._triggerRestore = dtAction {
-                return .reduce { state in
-                    if let restored = pendingRestore.consume() { state = restored }
+                return .reduce { [statePath] state in
+                    if let restored = pendingRestore.consume() {
+                        if let path = statePath {
+                            // Preserve the live DevToolsState (connection, socketId, flags)
+                            // — only the app-domain state is restored from history.
+                            let liveDevTools = state[keyPath: path]
+                            state = restored
+                            state[keyPath: path] = liveDevTools
+                            state[keyPath: path].isTimeTraveling = true
+                        } else {
+                            state = restored
+                        }
+                    }
                 }
-                // isTimeTraveling stays true after this — it is cleared deterministically
-                // only at the start of the next handleDevToolsCommand call (next jump/reset/
-                // commit/rollback). All reactive side-effects (calendar.start, onAppear, etc.)
-                // dispatched between two time-travel commands are suppressed without any timer.
             }
 
             return handleDevToolsCommand(
@@ -417,12 +430,17 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             )
         }
 
-        return .produce { ctx in
+        return .produce { [statePath] ctx in
             // Phase 3 runs synchronously after this action's reducers, before any
             // subsequent action is dispatched. Snapshot State (Sendable) here so
             // the async task records the correct post-reducer value. Encoding stays
             // in the task — only the raw state needs the synchronous capture.
             let snapshot = MainActor.assumeIsolated { ctx.stateAfter }
+            // Suppress recording while time travel is active (set by jumpToAction etc.
+            // in socketBehavior). Checked synchronously here — no race with async effects.
+            if let path = statePath, snapshot?[keyPath: path].isTimeTraveling == true {
+                return Effect.task { nil }
+            }
             return Effect.task { [snapshot] in
                 let mgr = ctx.environment.connectionManager
                 guard await mgr.shouldRecord, await mgr.isConnected else { return nil }

@@ -69,6 +69,11 @@ public struct DevToolsState: Sendable, Codable {
     /// refuse or accept dispatches accordingly.
     public var isLocked: Bool
 
+    /// `true` while time travel is active (after jumpToAction/toggleAction/importState,
+    /// before the next reset/commit/rollback). Actions dispatched as reactive side-effects
+    /// of the restored state are suppressed from recording while this is `true`.
+    public var isTimeTraveling: Bool
+
     // MARK: - Defaults
 
     public static let initial = DevToolsState(
@@ -81,7 +86,8 @@ public struct DevToolsState: Sendable, Codable {
         skippedActionIds: [],
         currentActionIndex: nil,
         isPaused: false,
-        isLocked: false
+        isLocked: false,
+        isTimeTraveling: false
     )
 
     public init(
@@ -94,7 +100,8 @@ public struct DevToolsState: Sendable, Codable {
         skippedActionIds: Set<Int>,
         currentActionIndex: Int?,
         isPaused: Bool,
-        isLocked: Bool
+        isLocked: Bool,
+        isTimeTraveling: Bool = false
     ) {
         self.connectionStatus = connectionStatus
         self.discoveredServices = discoveredServices
@@ -106,6 +113,7 @@ public struct DevToolsState: Sendable, Codable {
         self.currentActionIndex = currentActionIndex
         self.isPaused = isPaused
         self.isLocked = isLocked
+        self.isTimeTraveling = isTimeTraveling
     }
 }
 

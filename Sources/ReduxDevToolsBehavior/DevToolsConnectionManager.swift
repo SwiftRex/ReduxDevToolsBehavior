@@ -186,14 +186,7 @@ public actor DevToolsConnectionManager {
     private var isPaused = false
     private var isLocked = false
 
-    /// `true` while a time-travel restore is in progress.
-    /// Actions dispatched as a side-effect of the state restoration are suppressed
-    /// so they don't echo back to the devtools panel.
-    private var isTimeTraveling = false
-
-    func setTimeTraveling(_ value: Bool) { isTimeTraveling = value }
-
-    var shouldRecord: Bool { !isPaused && !isTimeTraveling }
+    var shouldRecord: Bool { !isPaused }
     var isChangeLocked: Bool { isLocked }
 
     func setPaused(_ paused: Bool) { isPaused = paused }
