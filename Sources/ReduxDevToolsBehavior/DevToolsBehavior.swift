@@ -51,14 +51,22 @@ public enum DevToolsBehavior {
     ///                            a restored snapshot. Required for time travel.
     /// Base overload — no Codable constraints. MirrorJSON for encoding, no time travel.
     /// Override individual closures for custom serialization or time travel.
+    /// - Parameter wrapping: When provided, DevTools becomes the **parent** behavior.
+    ///   While `DevToolsState.isTimeTraveling` is `true` (after a jump/toggle/import),
+    ///   only the DevTools behavior runs — `appBehavior` is completely skipped, producing
+    ///   no mutations and no effects. This prevents reactive side-effects (data reloads,
+    ///   `.onAppear` callbacks) from conflicting during time travel or flooding devtools.
+    ///   When `nil` (default), the old `Behavior.combine` sibling pattern is used —
+    ///   backward compatible but requires feature behaviors to check `isTimeTraveling`.
     public static func behaviors<AppAction: Sendable, AppState: Sendable, AppEnvironment: Sendable>(
         action actionPrism: Prism<AppAction, DevToolsAction>,
         state statePath: WritableKeyPath<AppState, DevToolsState>,
         environment envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
-        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil
+        extractDevToolsAction: (@Sendable (AppAction) -> DevToolsAction?)? = nil,
+        wrapping appBehavior: Behavior<AppAction, AppState, AppEnvironment>? = nil
     ) -> Behavior<AppAction, AppState, AppEnvironment> {
         let extract: @Sendable (AppAction) -> DevToolsAction? = extractDevToolsAction ?? { actionPrism.preview($0) }
-        return lift(
+        let devtools = lift(
             actionPrism, statePath, envPath,
             timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
@@ -66,6 +74,17 @@ public enum DevToolsBehavior {
                 isTimeTraveling: { $0[keyPath: statePath].isTimeTraveling }
             )
         )
+        guard let appBehavior else { return devtools }
+        return Behavior { action, context in
+            let devtoolsConsequence = devtools.handle(action, context)
+            // During time travel the app behavior is completely skipped —
+            // no mutations, no effects, no data reloads. isTimeTraveling is
+            // checked from context.stateBefore (pre-mutation, synchronous).
+            guard context.stateBefore?[keyPath: statePath].isTimeTraveling != true else {
+                return devtoolsConsequence
+            }
+            return .combine(devtoolsConsequence, appBehavior.handle(action, context))
+        }
     }
 
     // MARK: - Component behaviors (advanced composition)
