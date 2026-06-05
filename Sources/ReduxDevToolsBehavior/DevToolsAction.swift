@@ -31,7 +31,7 @@ public struct CodableError: Error, Codable, Sendable, CustomStringConvertible {
     public init(_ message: String) { description = message }
 }
 
-public enum DevToolsAction: Sendable, Codable {
+public enum DevToolsAction: Sendable {
 
     // MARK: - Startup
 
@@ -101,9 +101,10 @@ public enum DevToolsAction: Sendable, Codable {
     /// A remotedev command was received from the devtools panel.
     case _received(RemoteDevCommand)
 
-    /// Internal: signals that a decoded state snapshot is waiting in the behavior's
-    /// `PendingRestore` box and should be applied via `.reduce`. Never dispatch manually.
-    case _triggerRestore
+    /// Internal: carries a decoded `AppState` snapshot (as `any Sendable`) to be applied
+    /// by the time machine behavior via a pure `.reduce { state = payload as! AppState }`.
+    /// Dispatched from the time travel effect — never from user code, never over the wire.
+    case _triggerRestore(any Sendable)
 
     // MARK: - Commands surfaced from received messages
 
@@ -154,4 +155,132 @@ public enum DevToolsAction: Sendable, Codable {
 
     /// Unlock state changes.
     case unlockChanges
+}
+
+// MARK: - Codable
+// Explicit implementation required because _triggerRestore carries `any Sendable`
+// which is not Codable. That case is internal and never encoded/decoded.
+
+extension DevToolsAction: Codable {
+    private enum CK: String, CodingKey {
+        case type, host, port, socketId, error, service, index, id
+        case json, status, lifted, actionJSON
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CK.self)
+        switch self {
+        case .activate:              try c.encode("activate",        forKey: .type)
+        case .startBrowsing:         try c.encode("startBrowsing",   forKey: .type)
+        case .stopBrowsing:          try c.encode("stopBrowsing",    forKey: .type)
+        case .disconnect:            try c.encode("disconnect",      forKey: .type)
+        case .reset:                 try c.encode("reset",           forKey: .type)
+        case .commit:                try c.encode("commit",          forKey: .type)
+        case .rollback:              try c.encode("rollback",        forKey: .type)
+        case .pause:                 try c.encode("pause",           forKey: .type)
+        case .resume:                try c.encode("resume",          forKey: .type)
+        case .lockChanges:           try c.encode("lockChanges",     forKey: .type)
+        case .unlockChanges:         try c.encode("unlockChanges",   forKey: .type)
+        case ._triggerRestore:
+            // Payload is any Sendable — not encodable. Encode type only; decoded
+            // back as a no-op (payload cannot be reconstructed from JSON).
+            try c.encode("_triggerRestore",                          forKey: .type)
+        case let .connect(host, port):
+            try c.encode("connect",    forKey: .type)
+            try c.encode(host,         forKey: .host)
+            try c.encode(port,         forKey: .port)
+        case let .connectToService(svc):
+            try c.encode("connectToService", forKey: .type)
+            try c.encode(svc,                forKey: .service)
+        case let ._connected(host, port):
+            try c.encode("_connected", forKey: .type)
+            try c.encode(host,         forKey: .host)
+            try c.encode(port,         forKey: .port)
+        case let ._handshakeAck(socketId):
+            try c.encode("_handshakeAck",  forKey: .type)
+            try c.encode(socketId,         forKey: .socketId)
+        case let ._connectionFailed(err):
+            try c.encode("_connectionFailed", forKey: .type)
+            try c.encode(err.description,     forKey: .error)
+        case let ._connectionLost(err):
+            try c.encode("_connectionLost",   forKey: .type)
+            try c.encodeIfPresent(err?.description, forKey: .error)
+        case let ._serviceFound(svc):
+            try c.encode("_serviceFound",  forKey: .type)
+            try c.encode(svc,              forKey: .service)
+        case let ._serviceRemoved(svc):
+            try c.encode("_serviceRemoved", forKey: .type)
+            try c.encode(svc,               forKey: .service)
+        case let ._received(cmd):
+            try c.encode("_received",  forKey: .type)
+            try c.encode(cmd,          forKey: .json)
+        case let .jumpToAction(i):
+            try c.encode("jumpToAction", forKey: .type)
+            try c.encode(i,              forKey: .index)
+        case let .jumpToState(i):
+            try c.encode("jumpToState",  forKey: .type)
+            try c.encode(i,              forKey: .index)
+        case let .toggleAction(i):
+            try c.encode("toggleAction", forKey: .type)
+            try c.encode(i,              forKey: .id)
+        case let .importState(lifted):
+            try c.encode("importState",  forKey: .type)
+            try c.encode(lifted,         forKey: .lifted)
+        case let .dispatchAction(actionJSON):
+            try c.encode("dispatchAction", forKey: .type)
+            try c.encode(actionJSON,       forKey: .actionJSON)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CK.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "activate":            self = .activate
+        case "startBrowsing":       self = .startBrowsing
+        case "stopBrowsing":        self = .stopBrowsing
+        case "disconnect":          self = .disconnect
+        case "reset":               self = .reset
+        case "commit":              self = .commit
+        case "rollback":            self = .rollback
+        case "pause":               self = .pause
+        case "resume":              self = .resume
+        case "lockChanges":         self = .lockChanges
+        case "unlockChanges":       self = .unlockChanges
+        case "_triggerRestore":
+            // Payload is runtime-only — provide an inert placeholder value.
+            self = ._triggerRestore(())
+        case "connect":
+            self = .connect(host: try c.decode(String.self, forKey: .host),
+                            port: try c.decode(UInt16.self, forKey: .port))
+        case "connectToService":
+            self = .connectToService(try c.decode(DiscoveredService.self, forKey: .service))
+        case "_connected":
+            self = ._connected(host: try c.decode(String.self, forKey: .host),
+                               port: try c.decode(UInt16.self, forKey: .port))
+        case "_handshakeAck":
+            self = ._handshakeAck(socketId: try c.decode(String.self, forKey: .socketId))
+        case "_connectionFailed":
+            self = ._connectionFailed(CodableError(try c.decode(String.self, forKey: .error)))
+        case "_connectionLost":
+            self = ._connectionLost(try c.decodeIfPresent(String.self, forKey: .error).map(CodableError.init))
+        case "_serviceFound":
+            self = ._serviceFound(try c.decode(DiscoveredService.self, forKey: .service))
+        case "_serviceRemoved":
+            self = ._serviceRemoved(try c.decode(DiscoveredService.self, forKey: .service))
+        case "_received":
+            self = ._received(try c.decode(RemoteDevCommand.self, forKey: .json))
+        case "jumpToAction":
+            self = .jumpToAction(try c.decode(Int.self, forKey: .index))
+        case "jumpToState":
+            self = .jumpToState(try c.decode(Int.self, forKey: .index))
+        case "toggleAction":
+            self = .toggleAction(try c.decode(Int.self, forKey: .id))
+        case "importState":
+            self = .importState(try c.decode(ImportedLiftedState.self, forKey: .lifted))
+        case "dispatchAction":
+            self = .dispatchAction(actionJSON: try c.decode(String.self, forKey: .actionJSON))
+        default:
+            self = .activate
+        }
+    }
 }

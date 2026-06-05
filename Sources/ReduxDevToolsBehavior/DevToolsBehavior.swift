@@ -336,7 +336,7 @@ public enum DevToolsBehavior {
                 // Handled by timeMachineBehavior which knows the concrete AppAction type.
                 return .doNothing
 
-            case ._triggerRestore:
+            case ._triggerRestore(_):
                 // timeMachineBehavior (runs first in combine) restored the full AppState
                 // from history, overwriting DevToolsState with a stale snapshot.
                 // Here (running second) we recover the live DevToolsState from
@@ -359,16 +359,6 @@ public enum DevToolsBehavior {
 
 // MARK: - Private helpers
 
-/// Thread-safe typed box for two-phase time travel restore.
-/// The produce effect decodes a JSON string into AppState and stores it here;
-/// the subsequent reduce reads it synchronously — no deserialization in reduce.
-final class PendingRestore<S: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var state: S?
-    func set(_ s: S)    { lock.withLock { state = s } }
-    func consume() -> S? { lock.withLock { defer { state = nil }; return state } }
-}
-
 // MARK: - Private factories
 
 /// Shared implementation of all `timeMachineBehavior` overloads.
@@ -383,9 +373,6 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
     // Typed box for the two-phase time travel restore.
     // Phase 1 (produce): decode JSON → store AppState here.
-    // Phase 2 (reduce):  consume typed state → assign to store, no JSON involved.
-    let pendingRestore = PendingRestore<AppState>()
-
     return Behavior<AppAction, AppState, DevToolsEnvironment> { action, _ in
 
         if let dtAction = extractDevToolsAction(action) {
@@ -413,17 +400,11 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 }
             }
 
-            // Phase 2: consume the decoded state from the box and apply it.
-            // The produce clears the time-travel flag after the restore — any actions
-            // dispatched as a side-effect of the state change (e.g. UI lifecycle) are
-            // suppressed until the flag is cleared.
-            if case ._triggerRestore = dtAction {
-                // consume() is a side effect — it belongs here in Phase 1 (the behavior
-                // handler, @MainActor), not inside the reducer. The .reduce closure below
-                // is a pure assignment of the already-computed value.
-                let restored = pendingRestore.consume()
+            // The decoded AppState is carried IN the action payload — pure reducer.
+            if case ._triggerRestore(let erased) = dtAction,
+               let restored = erased as? AppState {
                 return .reduce { state in
-                    if let restored { state = restored }
+                    state = restored
                     // DevToolsState preservation and isTimeTraveling = true are handled
                     // by socketBehavior, which runs after this in Behavior.combine.
                 }
@@ -431,8 +412,7 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
 
             return handleDevToolsCommand(
                 dtAction,
-                wrapDevToolsAction: wrapDevToolsAction,
-                pendingRestore: pendingRestore
+                wrapDevToolsAction: wrapDevToolsAction
             )
         }
 

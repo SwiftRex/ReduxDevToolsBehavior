@@ -14,8 +14,7 @@ import SwiftRexConcurrency
 /// `Decodable` at runtime (time travel / Dispatcher tab silently no-ops).
 func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
     _ command: DevToolsAction,
-    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
-    pendingRestore: PendingRestore<AppState>
+    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?
 ) -> Consequence<AppState, DevToolsEnvironment, AppAction> {
 
     switch command {
@@ -24,15 +23,12 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
-                // Clear any suppression from the previous restore — all reactive side-effects
-                // that fired between the last _triggerRestore and this command are now done.
-
                 guard let json = await mgr.stateJSON(at: index),
                       let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
-                pendingRestore.set(state)
-                return wrap(._triggerRestore)
+                // State is carried IN the action — no mutable shared box.
+                return wrap(._triggerRestore(state))
             }
         }
 
@@ -40,7 +36,6 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
-
                 let isNowSkipped = await mgr.toggleSkipped(id)
                 let targetIndex  = isNowSkipped ? max(0, id - 1) : id
                 let base         = await mgr.historyBaseIndex
@@ -49,8 +44,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
-                pendingRestore.set(state)
-                return wrap(._triggerRestore)
+                return wrap(._triggerRestore(state))
             }
         }
 
@@ -88,8 +82,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
-                pendingRestore.set(state)
-                return wrap(._triggerRestore)
+                return wrap(._triggerRestore(state))
             }
         }
 
