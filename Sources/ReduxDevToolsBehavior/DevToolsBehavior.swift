@@ -63,7 +63,7 @@ public enum DevToolsBehavior {
             timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
                 wrapDevToolsAction: actionPrism.review,
-                statePath: statePath
+                isTimeTraveling: { $0[keyPath: statePath].isTimeTraveling }
             )
         )
     }
@@ -103,7 +103,7 @@ public enum DevToolsBehavior {
     public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil }
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil, statePath: nil)
+        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil, isTimeTraveling: nil)
     }
 
     /// The socket-lifecycle behavior: connection, browsing, and devtools command routing.
@@ -114,7 +114,7 @@ public enum DevToolsBehavior {
     /// Prefer ``behaviors(action:state:environment:extractDevToolsAction:restoreStateAction:)``
     /// unless you need to compose the two behaviors separately.
     public static let socketBehavior: Behavior<DevToolsAction, DevToolsState, DevToolsEnvironment> =
-        Behavior { action, _ in
+        Behavior { action, context in
             switch action {
 
             case .activate:
@@ -337,8 +337,16 @@ public enum DevToolsBehavior {
                 return .doNothing
 
             case ._triggerRestore:
-                // Handled by timeMachineBehavior which owns the PendingRestore box.
-                return .doNothing
+                // timeMachineBehavior (runs first in combine) restored the full AppState
+                // from history, overwriting DevToolsState with a stale snapshot.
+                // Here (running second) we recover the live DevToolsState from
+                // context.stateBefore (captured before any reducer ran for this action)
+                // and set isTimeTraveling so the recording path suppresses echo actions.
+                let live = context.stateBefore
+                return .reduce { devTools in
+                    if let live { devTools = live }
+                    devTools.isTimeTraveling = true
+                }
             }
         }
 
@@ -368,7 +376,10 @@ final class PendingRestore<S: Sendable>: @unchecked Sendable {
 private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
     extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction?,
     wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
-    statePath: WritableKeyPath<AppState, DevToolsState>?
+    /// A getter derived from the state path + `DevToolsState.isTimeTraveling`.
+    /// Scoped behavior (socketBehavior) manages the flag; this function only reads it.
+    /// Pass `nil` for the standalone `timeMachineBehavior` overload (no suppression).
+    isTimeTraveling: (@Sendable (AppState) -> Bool)?
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
     // Typed box for the two-phase time travel restore.
     // Phase 1 (produce): decode JSON → store AppState here.
@@ -407,19 +418,14 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             // dispatched as a side-effect of the state change (e.g. UI lifecycle) are
             // suppressed until the flag is cleared.
             if case ._triggerRestore = dtAction {
-                return .reduce { [statePath] state in
-                    if let restored = pendingRestore.consume() {
-                        if let path = statePath {
-                            // Preserve the live DevToolsState (connection, socketId, flags)
-                            // — only the app-domain state is restored from history.
-                            let liveDevTools = state[keyPath: path]
-                            state = restored
-                            state[keyPath: path] = liveDevTools
-                            state[keyPath: path].isTimeTraveling = true
-                        } else {
-                            state = restored
-                        }
-                    }
+                // consume() is a side effect — it belongs here in Phase 1 (the behavior
+                // handler, @MainActor), not inside the reducer. The .reduce closure below
+                // is a pure assignment of the already-computed value.
+                let restored = pendingRestore.consume()
+                return .reduce { state in
+                    if let restored { state = restored }
+                    // DevToolsState preservation and isTimeTraveling = true are handled
+                    // by socketBehavior, which runs after this in Behavior.combine.
                 }
             }
 
@@ -430,15 +436,15 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             )
         }
 
-        return .produce { [statePath] ctx in
+        return .produce { [isTimeTraveling] ctx in
             // Phase 3 runs synchronously after this action's reducers, before any
             // subsequent action is dispatched. Snapshot State (Sendable) here so
             // the async task records the correct post-reducer value. Encoding stays
             // in the task — only the raw state needs the synchronous capture.
             let snapshot = MainActor.assumeIsolated { ctx.stateAfter }
-            // Suppress recording while time travel is active (set by jumpToAction etc.
-            // in socketBehavior). Checked synchronously here — no race with async effects.
-            if let path = statePath, snapshot?[keyPath: path].isTimeTraveling == true {
+            // isTimeTraveling is set by socketBehavior's reducers (jumpToAction etc.)
+            // and read here synchronously — no race with async effects.
+            if let getter = isTimeTraveling, snapshot.map(getter) == true {
                 return Effect.task { nil }
             }
             return Effect.task { [snapshot] in
@@ -473,13 +479,16 @@ private func lift<AppAction: Sendable, AppState: Sendable, AppEnvironment: Senda
     _ envPath: KeyPath<AppEnvironment, DevToolsEnvironment>,
     timeMachine: Behavior<AppAction, AppState, DevToolsEnvironment>
 ) -> Behavior<AppAction, AppState, AppEnvironment> {
+    // timeMachine runs first so _triggerRestore replaces the full AppState from history.
+    // socketBehavior runs second so it can capture context.stateBefore (the live
+    // DevToolsState) and restore it on top — preserving connection, socketId, flags.
     Behavior.combine(
+        timeMachine.liftEnvironment { $0[keyPath: envPath] },
         DevToolsBehavior.socketBehavior.lift(
             action: actionPrism,
             state: statePath,
             environment: { $0[keyPath: envPath] }
-        ),
-        timeMachine.liftEnvironment { $0[keyPath: envPath] }
+        )
     )
 }
 

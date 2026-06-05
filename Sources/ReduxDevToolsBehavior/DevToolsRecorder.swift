@@ -32,7 +32,6 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
@@ -51,7 +50,6 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
@@ -91,7 +89,6 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
