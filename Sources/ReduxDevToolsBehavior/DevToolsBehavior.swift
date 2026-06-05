@@ -62,8 +62,7 @@ public enum DevToolsBehavior {
             actionPrism, statePath, envPath,
             timeMachine: makeTimeMachine(
                 extractDevToolsAction: extract,
-                wrapDevToolsAction: actionPrism.review,
-                isTimeTraveling: { $0[keyPath: statePath].isTimeTraveling }
+                wrapDevToolsAction: actionPrism.review
             )
         )
     }
@@ -103,7 +102,7 @@ public enum DevToolsBehavior {
     public static func timeMachineBehavior<AppAction: Sendable, AppState: Sendable>(
         extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction? = { _ in nil }
     ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
-        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil, isTimeTraveling: nil)
+        makeTimeMachine(extractDevToolsAction: extractDevToolsAction, wrapDevToolsAction: nil)
     }
 
     /// The socket-lifecycle behavior: connection, browsing, and devtools command routing.
@@ -365,11 +364,7 @@ public enum DevToolsBehavior {
 /// All closures are fully typed — no `Any`, no casts.
 private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
     extractDevToolsAction: @escaping @Sendable (AppAction) -> DevToolsAction?,
-    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?,
-    /// A getter derived from the state path + `DevToolsState.isTimeTraveling`.
-    /// Scoped behavior (socketBehavior) manages the flag; this function only reads it.
-    /// Pass `nil` for the standalone `timeMachineBehavior` overload (no suppression).
-    isTimeTraveling: (@Sendable (AppState) -> Bool)?
+    wrapDevToolsAction: (@Sendable (DevToolsAction) -> AppAction)?
 ) -> Behavior<AppAction, AppState, DevToolsEnvironment> {
     // Typed box for the two-phase time travel restore.
     // Phase 1 (produce): decode JSON → store AppState here.
@@ -416,17 +411,12 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
             )
         }
 
-        return .produce { [isTimeTraveling] ctx in
+        return .produce { ctx in
             // Phase 3 runs synchronously after this action's reducers, before any
             // subsequent action is dispatched. Snapshot State (Sendable) here so
             // the async task records the correct post-reducer value. Encoding stays
             // in the task — only the raw state needs the synchronous capture.
             let snapshot = MainActor.assumeIsolated { ctx.stateAfter }
-            // isTimeTraveling is set by socketBehavior's reducers (jumpToAction etc.)
-            // and read here synchronously — no race with async effects.
-            if let getter = isTimeTraveling, snapshot.map(getter) == true {
-                return Effect.task { nil }
-            }
             return Effect.task { [snapshot] in
                 let mgr = ctx.environment.connectionManager
                 guard await mgr.shouldRecord, await mgr.isConnected else { return nil }
