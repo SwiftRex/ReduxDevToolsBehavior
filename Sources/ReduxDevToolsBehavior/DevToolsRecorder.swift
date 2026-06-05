@@ -51,7 +51,10 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
     case .reset:
         return .produce { ctx in
             Effect.fireAndForget {
-                await ctx.environment.connectionManager.resetStateJSONs()
+                let mgr = ctx.environment.connectionManager
+                await mgr.resetStateJSONs()
+                // Re-send INIT on the next action so the devtools panel re-syncs.
+                await mgr.resetInitSent()
             }
         }
 

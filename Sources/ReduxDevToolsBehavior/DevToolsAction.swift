@@ -106,6 +106,11 @@ public enum DevToolsAction: Sendable {
     /// Dispatched from the time travel effect — never from user code, never over the wire.
     case _triggerRestore(any Sendable)
 
+    /// Internal: clears the `isTimeTraveling` flag after the first reactive side-effect
+    /// following a state restore has been suppressed. Recording resumes normally from
+    /// the next action onwards.
+    case _endTimeTraveling
+
     // MARK: - Commands surfaced from received messages
 
     /// Time-travel: restore the state produced by action at `index`.
@@ -181,6 +186,7 @@ extension DevToolsAction: Codable {
         case .resume:                try c.encode("resume",          forKey: .type)
         case .lockChanges:           try c.encode("lockChanges",     forKey: .type)
         case .unlockChanges:         try c.encode("unlockChanges",   forKey: .type)
+        case ._endTimeTraveling:    try c.encode("_endTimeTraveling",  forKey: .type)
         case ._triggerRestore:
             // Payload is any Sendable — not encodable. Encode type only; decoded
             // back as a no-op (payload cannot be reconstructed from JSON).
@@ -246,6 +252,7 @@ extension DevToolsAction: Codable {
         case "resume":              self = .resume
         case "lockChanges":         self = .lockChanges
         case "unlockChanges":       self = .unlockChanges
+        case "_endTimeTraveling":   self = ._endTimeTraveling
         case "_triggerRestore":
             // Payload is runtime-only — provide an inert placeholder value.
             self = ._triggerRestore(())

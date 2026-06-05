@@ -87,6 +87,10 @@ public actor DevToolsConnectionManager {
         return true
     }
 
+    /// Clears the INIT flag so the next action re-sends INIT to the devtools panel.
+    /// Called on reset so the panel re-syncs with the current state.
+    func resetInitSent() { hasSentInit = false }
+
     // MARK: - State JSON ring buffer
 
     /// At most `maxHistorySize` state JSON strings.
