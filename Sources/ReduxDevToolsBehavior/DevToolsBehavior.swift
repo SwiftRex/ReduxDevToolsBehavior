@@ -404,9 +404,10 @@ private func makeTimeMachine<AppAction: Sendable, AppState: Sendable>(
                 return .reduce { state in
                     if let restored = pendingRestore.consume() { state = restored }
                 }
-                .produce { ctx in
-                    Effect.fireAndForget { await ctx.environment.connectionManager.setTimeTraveling(false) }
-                }
+                // isTimeTraveling stays true after this — it is cleared deterministically
+                // only at the start of the next handleDevToolsCommand call (next jump/reset/
+                // commit/rollback). All reactive side-effects (calendar.start, onAppear, etc.)
+                // dispatched between two time-travel commands are suppressed without any timer.
             }
 
             return handleDevToolsCommand(

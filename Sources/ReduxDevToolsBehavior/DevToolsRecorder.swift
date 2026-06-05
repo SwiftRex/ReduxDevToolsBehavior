@@ -23,12 +23,16 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
     case let .jumpToAction(index), let .jumpToState(index):
         return .produce { ctx in
             Effect.task {
-                guard let json = await ctx.environment.connectionManager.stateJSON(at: index),
+                let mgr = ctx.environment.connectionManager
+                // Clear any suppression from the previous restore — all reactive side-effects
+                // that fired between the last _triggerRestore and this command are now done.
+                await mgr.setTimeTraveling(false)
+                guard let json = await mgr.stateJSON(at: index),
                       let state = json.jsonDecode(as: AppState.self, using: ctx.environment.decoderFactory),
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await ctx.environment.connectionManager.setTimeTraveling(true)
+                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
@@ -37,6 +41,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
+                await mgr.setTimeTraveling(false)
                 let isNowSkipped = await mgr.toggleSkipped(id)
                 let targetIndex  = isNowSkipped ? max(0, id - 1) : id
                 let base         = await mgr.historyBaseIndex
@@ -46,30 +51,40 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await ctx.environment.connectionManager.setTimeTraveling(true)
+                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
 
     case .reset:
         return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.resetStateJSONs() }
+            Effect.fireAndForget {
+                await ctx.environment.connectionManager.setTimeTraveling(false)
+                await ctx.environment.connectionManager.resetStateJSONs()
+            }
         }
 
     case .commit:
         return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.commitStateJSONs() }
+            Effect.fireAndForget {
+                await ctx.environment.connectionManager.setTimeTraveling(false)
+                await ctx.environment.connectionManager.commitStateJSONs()
+            }
         }
 
     case .rollback:
         return .produce { ctx in
-            Effect.fireAndForget { await ctx.environment.connectionManager.rollbackStateJSON() }
+            Effect.fireAndForget {
+                await ctx.environment.connectionManager.setTimeTraveling(false)
+                await ctx.environment.connectionManager.rollbackStateJSON()
+            }
         }
 
     case let .importState(lifted):
         return .produce { ctx in
             Effect.task {
                 let mgr = ctx.environment.connectionManager
+                await mgr.setTimeTraveling(false)
                 await mgr.replaceStateJSONs(lifted.computedStateJSONs)
                 await mgr.setSkippedActionIds(lifted.skippedActionIds)
                 let base = await mgr.historyBaseIndex
@@ -79,7 +94,7 @@ func handleDevToolsCommand<AppAction: Sendable, AppState: Sendable>(
                       let wrap  = wrapDevToolsAction
                 else { return nil }
                 pendingRestore.set(state)
-                await ctx.environment.connectionManager.setTimeTraveling(true)
+                await mgr.setTimeTraveling(true)
                 return wrap(._triggerRestore)
             }
         }
